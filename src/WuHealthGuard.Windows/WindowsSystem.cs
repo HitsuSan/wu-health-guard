@@ -77,6 +77,37 @@ public sealed class WindowsProcesses : IProcessInfo, IProcessRunner
         return processes.Length > 0;
     }
 
+    public TimeSpan? TryGetCpuTime(string processName)
+    {
+        var processes = Process.GetProcessesByName(processName);
+        try
+        {
+            if (processes.Length == 0)
+            {
+                return null;
+            }
+
+            var total = TimeSpan.Zero;
+            foreach (var p in processes)
+            {
+                total += p.TotalProcessorTime;
+            }
+
+            return total;
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+        {
+            return null; // No access, or it exited while we looked.
+        }
+        finally
+        {
+            foreach (var p in processes)
+            {
+                p.Dispose();
+            }
+        }
+    }
+
     public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, Action<string>? onOutputLine, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(arguments);

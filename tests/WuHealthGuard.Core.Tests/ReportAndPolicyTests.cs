@@ -53,7 +53,9 @@ public class HealthScannerTests
     {
         var processes = new FakeProcesses();
         processes.Running.Add(ServicingActivityCheck.TiWorker);
-        var scanner = new HealthScanner([new Throwing(), new ServicingActivityCheck(processes)], new FakeSystem(), new FakeTime(T.Now));
+        processes.CpuTimes.Enqueue(TimeSpan.Zero);
+        processes.CpuTimes.Enqueue(TimeSpan.FromSeconds(1));
+        var scanner = new HealthScanner([new Throwing(), new ServicingActivityCheck(processes) { SampleWindow = TimeSpan.Zero }], new FakeSystem(), new FakeTime(T.Now));
 
         var report = await scanner.ScanAsync();
 

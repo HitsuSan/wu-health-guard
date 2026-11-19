@@ -46,6 +46,9 @@ public interface IProcessInfo
 {
     /// <summary>True if any process with this name (without <c>.exe</c>) is running.</summary>
     bool IsRunning(string processName);
+
+    /// <summary>Total CPU time used so far by processes with this name, or null if none run or it can't be read.</summary>
+    TimeSpan? TryGetCpuTime(string processName);
 }
 
 public enum ComponentStoreState

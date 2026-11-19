@@ -153,7 +153,27 @@ internal sealed class FakeProcesses : IProcessInfo, IProcessRunner
 
     public Func<string, IReadOnlyList<string>, ProcessResult> Handler { get; set; } = (_, _) => new ProcessResult(0, "ok");
 
-    public bool IsRunning(string processName) => Running.Contains(processName);
+    /// <summary>CPU time readings returned in order; the last one repeats. Empty: unreadable.</summary>
+    public Queue<TimeSpan?> CpuTimes { get; } = new();
+
+    /// <summary>When set, the process stops running after this many CPU readings.</summary>
+    public int? ExitAfterReadings { get; set; }
+
+    private int _readings;
+
+    public bool IsRunning(string processName) =>
+        Running.Contains(processName) && (ExitAfterReadings is not { } n || _readings < n);
+
+    public TimeSpan? TryGetCpuTime(string processName)
+    {
+        _readings++;
+        if (!Running.Contains(processName) || CpuTimes.Count == 0)
+        {
+            return null;
+        }
+
+        return CpuTimes.Count > 1 ? CpuTimes.Dequeue() : CpuTimes.Peek();
+    }
 
     public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, Action<string>? onOutputLine, CancellationToken cancellationToken)
     {

@@ -12,8 +12,8 @@ internal sealed record AppSettings
 
     public int ScanIntervalMinutes { get; init; } = 60;
 
-    /// <summary>Ask Windows to hold a restart/shutdown while the verdict is "Don't restart yet". Off by default.</summary>
-    public bool ShutdownGuard { get; init; }
+    /// <summary>Warn (hold the restart/shutdown with a reason) while the verdict is "Don't restart yet". On by default.</summary>
+    public bool ShutdownGuard { get; init; } = true;
 
     /// <summary>Refuse risky fixes if a restore point can't be created.</summary>
     public bool RequireRestorePoint { get; init; } = true;

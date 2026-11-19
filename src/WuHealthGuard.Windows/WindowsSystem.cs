@@ -35,6 +35,20 @@ public sealed class WindowsFileSystem : IFileSystem, IFileOperations
 
     public bool DirectoryExists(string path) => Directory.Exists(path);
 
+    public IReadOnlyList<string> GetFileNames(string directory, string pattern)
+    {
+        try
+        {
+            return Directory.Exists(directory)
+                ? Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly).Select(p => Path.GetFileName(p)).ToList()
+                : [];
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return [];
+        }
+    }
+
     public bool Exists(string path) => File.Exists(path) || Directory.Exists(path);
 
     public void Move(string source, string destination)

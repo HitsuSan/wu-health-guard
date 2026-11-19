@@ -47,6 +47,14 @@ public sealed partial class WindowsRegistry : IRegistryReader, IRegistryWriter
         root.DeleteSubKeyTree(subPath, throwOnMissingSubKey: false);
     }
 
+    public void SetDword(string path, string valueName, int value)
+    {
+        var (hive, subPath) = Split(path);
+        using var root = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
+        using var key = root.CreateSubKey(subPath, writable: true);
+        key.SetValue(valueName, value, RegistryValueKind.DWord);
+    }
+
     /// <summary>Writes a string value, creating the key if needed.</summary>
     public static void SetString(string path, string valueName, string value)
     {

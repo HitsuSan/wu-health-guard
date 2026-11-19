@@ -16,8 +16,8 @@ internal sealed class TrayContext : ApplicationContext
     private readonly ContextMenuStrip _menu = new();
     private readonly ToolStripMenuItem _verdictItem = new("Checking…") { Enabled = false };
     private readonly ToolStripMenuItem _pauseItem = new();
-    private readonly ToolStripMenuItem _autoPauseItem = new("Auto-pause updates when problems are found") { CheckOnClick = true };
-    private readonly ToolStripMenuItem _shutdownGuardItem = new("Hold restarts while unsafe") { CheckOnClick = true };
+    private readonly ToolStripMenuItem _autoPauseItem = new("Pause updates automatically while red") { CheckOnClick = true };
+    private readonly ToolStripMenuItem _shutdownGuardItem = new("Warn before restart or shutdown while red") { CheckOnClick = true };
     private readonly System.Windows.Forms.Timer _timer = new();
     private readonly ShutdownGuardWindow _guard = new();
     private readonly FixRunner _fixes;
@@ -28,7 +28,10 @@ internal sealed class TrayContext : ApplicationContext
 
     public TrayContext()
     {
-        _fixes = _app.CreateFixRunner(new WinFormsConfirmationPrompt(() => _form is { Visible: true } ? _form : null), _settings.RequireRestorePoint);
+        _fixes = _app.CreateFixRunner(
+            new WinFormsConfirmationPrompt(() => _form is { Visible: true } ? _form : null),
+            () => _settings.Guard.PauseDays,
+            _settings.RequireRestorePoint);
         _form = new ReportForm(_fixes, ScanAsync);
 
         _autoPauseItem.Checked = _settings.Guard.AutoPauseEnabled;

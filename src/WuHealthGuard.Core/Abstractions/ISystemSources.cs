@@ -28,6 +28,9 @@ public interface IFileSystem
     FileSnapshot? GetFile(string path);
 
     bool DirectoryExists(string path);
+
+    /// <summary>Names (not paths) of files in <paramref name="directory"/> matching a wildcard pattern. Empty if none or unreadable.</summary>
+    IReadOnlyList<string> GetFileNames(string directory, string pattern);
 }
 
 public interface ISystemInfo

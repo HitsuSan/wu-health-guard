@@ -1,5 +1,7 @@
+using System.Text.RegularExpressions;
 using WuHealthGuard.Core.Abstractions;
 using WuHealthGuard.Core.Fixes;
+using WuHealthGuard.Core.Guard;
 
 namespace WuHealthGuard.Core.Tests;
 
@@ -43,6 +45,8 @@ internal sealed class FakeRegistry : IRegistryReader, IRegistryWriter
 
     public List<string> Deleted { get; } = [];
 
+    public List<(string Path, string Name, int Value)> DwordWrites { get; } = [];
+
     public FakeRegistry AddKey(string path, DateTimeOffset? lastWrite = null, params (string Name, object Value)[] values)
     {
         // Create parents so subkey enumeration works.
@@ -77,6 +81,12 @@ internal sealed class FakeRegistry : IRegistryReader, IRegistryWriter
     public DateTimeOffset? GetKeyLastWriteTime(string path) =>
         _keys.TryGetValue(path, out var key) ? key.LastWrite : null;
 
+    public void SetDword(string path, string valueName, int value)
+    {
+        DwordWrites.Add((path, valueName, value));
+        AddKey(path, _keys.TryGetValue(path, out var k) ? k.LastWrite : null, (valueName, value));
+    }
+
     public void DeleteKeyTree(string path)
     {
         Deleted.Add(path);
@@ -104,6 +114,16 @@ internal sealed class FakeFiles : IFileSystem, IFileOperations
     public FileSnapshot? GetFile(string path) => Files.GetValueOrDefault(path);
 
     public bool DirectoryExists(string path) => Directories.Contains(path);
+
+    public IReadOnlyList<string> GetFileNames(string directory, string pattern)
+    {
+        var regex = new Regex("^" + Regex.Escape(pattern).Replace(@"\*", ".*", StringComparison.Ordinal).Replace(@"\?", ".", StringComparison.Ordinal) + "$", RegexOptions.IgnoreCase);
+        return Files.Keys
+            .Where(p => p.StartsWith(directory + "\\", StringComparison.OrdinalIgnoreCase) && !p[(directory.Length + 1)..].Contains('\\', StringComparison.Ordinal))
+            .Select(p => p[(directory.Length + 1)..])
+            .Where(n => regex.IsMatch(n))
+            .ToList();
+    }
 
     public bool Exists(string path) => Files.ContainsKey(path) || Directories.Contains(path);
 
@@ -210,4 +230,15 @@ internal sealed class FakeBackup : IBackupService
         Items.Add((item, backupDirectory));
         return Task.CompletedTask;
     }
+}
+
+internal sealed class FakePause : IUpdatePauseController
+{
+    public PauseStatus Status { get; set; } = PauseStatus.NotPaused;
+
+    public PauseStatus GetStatus() => Status;
+
+    public void Pause(DateTimeOffset until) => Status = new PauseStatus(true, until);
+
+    public void Unpause() => Status = PauseStatus.NotPaused;
 }

@@ -18,6 +18,12 @@ public static class RegistryPaths
     public const string Updates = @"HKLM\SOFTWARE\Microsoft\Updates";
     public const string UpdateExeVolatile = "UpdateExeVolatile";
 
+    /// <summary>Fast Startup: <c>HiberbootEnabled</c> = 1. Only active if hibernation is enabled too.</summary>
+    public const string SessionManagerPower = SessionManager + @"\Power";
+    public const string HiberbootEnabled = "HiberbootEnabled";
+    public const string Power = @"HKLM\SYSTEM\CurrentControlSet\Control\Power";
+    public const string HibernateEnabled = "HibernateEnabled";
+
     /// <summary>Where the Settings app stores "Pause updates".</summary>
     public const string WuUxSettings = @"HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings";
 }
@@ -41,6 +47,9 @@ public static class CbsPackageState
     public const int Permanent = 0x80;
 
     public static bool IsPending(int state) => state is InstallPending or UninstallPending;
+
+    /// <summary>States CBS passes through while working. Still there after a restart means the work was abandoned.</summary>
+    public static bool IsTransitional(int state) => state is Resolving or Staging;
 
     public static string Describe(int state) => state switch
     {

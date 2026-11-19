@@ -1,118 +1,116 @@
 # WU Health Guard — Plan
 
-> Windows tray app that checks Windows Update health **before you restart**: flags stuck CBS
-> Install/Uninstall Pending packages, `pending.xml` and reboot flags, DISM component-store damage and
-> failed updates, warns or auto-pauses updates, and offers safe one-click fixes (risky ones need
-> confirmation, with backup and log).
+The [README](../README.md) is the spec: what the app checks, what it does, and the CHROMAZERO incident it
+has to prevent. This file says how it's built and where each requirement lives.
 
-## 1. What the user gets
+## 1. The tray light
 
-A tray icon that answers one question: **"Is it safe to restart right now?"**
+| Light | Verdict | Meaning |
+|-------|---------|---------|
+| Green | Safe to restart | Nothing pending, or updates staged normally that will finish during the restart. |
+| Yellow | Caution | Fix first: updates pending for days without a real restart (Fast Startup), failed updates, a repairable component store, a stale reboot flag. |
+| Red | Don't restart | Packages stuck across a restart, pending.xml stale or missing while packages are pending, servicing running right now, or a component store that can't be repaired. |
 
-| Icon | Verdict | Meaning |
-|------|---------|---------|
-| Green | Safe to restart | Nothing pending, nothing broken. |
-| Blue | Restart recommended | Updates are staged normally and will finish at the next restart. |
-| Yellow | Caution | Something is off (failed updates, a repairable component store, a stale reboot flag). Restart is probably fine, but fix this first. |
-| Red | Don't restart yet | Servicing is mid-flight, or the state looks stuck or damaged in a way that can cause a failed boot or an "Undoing changes" loop. |
+Clicking it opens a report: each finding has a plain-language explanation, how long the problem has
+existed, the raw evidence (package names, registry keys, HRESULTs) and buttons for the fixes that apply.
 
-Clicking the icon opens a report: each finding has a plain-language explanation, the raw evidence
-(registry key, package name, HRESULT…), and the fixes that apply to it.
+## 2. Requirement coverage
 
-## 2. Detection (checks)
+Every README item and incident step, where it's implemented and which test proves it.
+Tests are in `tests/WuHealthGuard.Core.Tests`; `ChromazeroScenarioTests` replays the incident through the
+full scanner.
 
-Each check is a small class over a mockable abstraction, so the logic is unit-tested on any OS.
+### What it checks
 
-| Check | Source | Normal | Problem |
-|-------|--------|--------|---------|
-| **CBS pending packages** | `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages\*\CurrentState` (`0x60` Install Pending, `0x05` Uninstall Pending) | Pending, written **after** the last boot → finishes at next restart | Pending, last written **before** the last boot → survived a restart → **stuck** |
-| **Reboot flags** | CBS `RebootPending`, `RebootInProgress`, `PackagesPending`; WU `Auto Update\RebootRequired`, `Services\Pending`; `PendingFileRenameOperations`; `Updates\UpdateExeVolatile` | Set after last boot | Set before last boot → stale flag |
-| **pending.xml** | `%windir%\WinSxS\pending.xml` (+ `pending.xml.bad`) | Newer than last boot | Older than last boot → servicing transaction that didn't complete at boot |
-| **Servicing in progress** | `TiWorker.exe` running | — | Restarting now interrupts the servicing stack |
-| **Component store** | DISM API `DismCheckImageHealth` (fast; ScanHealth on demand) | Healthy | Repairable / Not repairable |
-| **Failed updates** | WUA COM `Microsoft.Update.Session` → `QueryHistory` | — | Latest attempt of an update failed/aborted; repeated failures |
+| README | Implementation | Tests |
+|--------|----------------|-------|
+| CBS packages in Install/Uninstall Pending, **and how long** | `CbsPendingPackagesCheck`: grouped per state, with age ("stuck in Install Pending for 9 days"). Pending since before the last boot = stuck (red). Pending for more than 3 days with no real restart = yellow. Resolving/Staging after a restart = yellow. | `CbsPendingPackagesCheckTests` |
+| `pending.xml` exists; **missing while packages are pending** | `PendingXmlCheck`: fresh = green, older than last boot = red, missing while packages are pending (after a 1-hour install grace) = red. Leftovers (`pending.old`, `pending.xml.bad`, …) listed. | `PendingXmlCheckTests` |
+| RebootPending, RebootRequired, PendingFileRenameOperations | `RebootFlagsCheck` (also RebootInProgress, PackagesPending, Services\Pending, UpdateExeVolatile). Flags older than the last boot = stale (yellow). | `RebootFlagsCheckTests` |
+| `DISM /CheckHealth`, `/ScanHealth` on demand | `ComponentStoreCheck` over the DISM API (`DismCheckImageHealth`, language-independent). "Full component store scan" button runs ScanHealth. | `ComponentStoreCheckTests` |
+| Failed update history | `FailedUpdatesCheck` (WUA COM): latest attempt failed and not later succeeded; 3+ failures escalate. | `FailedUpdatesCheckTests` |
+| Fast Startup on | `FastStartupCheck`: info normally; yellow when packages have waited 3+ days, because Shut down never finishes them. | `FastStartupCheckTests` |
+| (implied) servicing running now | `ServicingActivityCheck`: TiWorker.exe running = red. | `ServicingActivityCheckTests` |
 
-The "stuck" heuristic relies on comparing timestamps (registry key last-write time, file time)
-with the last boot time. That is the core idea and needs validation on real machines (§7).
+### What it does
 
-## 3. Guard actions
+| README | Implementation | Tests |
+|--------|----------------|-------|
+| Tray light green / yellow / red | `TrayIcons`, `HealthReport.Verdict`. | `HealthReportTests` |
+| Warns before a restart or shutdown | `ShutdownGuardWindow`: while red, answers `WM_QUERYENDSESSION` with a block reason so Windows shows "WU Health Guard: …" with Cancel / Restart anyway. **On by default.** Plus a balloon whenever the light gets worse. | VM test (§5) |
+| Pauses Windows Update automatically while red | `GuardPolicy`: opt-in, triggers at red. If a pause runs out while still red, the next scan pauses again; an existing pause is never extended. | `GuardPolicyTests`, scenario Nov 18 |
+| Safe fixes in one click: pause updates, clear download cache, turn off Fast Startup | `PauseUpdatesFix`, `ResetUpdateCacheFix` (renames, never deletes; **refused while red**, see Nov 18), `TurnOffFastStartupFix`; also restart WU services, `sfc /scannow`. | `FixRunnerTests` |
+| Risky fixes (anything touching CBS, WinSxS or pending state) only after confirmation, with backup and log | `FixRunner`: confirm → back up (restore point + `reg export`) → apply → log. A failed backup stops the fix. Risky: DISM RestoreHealth, clear stale reboot flag, remove a stuck package. | `FixRunnerTests` |
+| Limit: no repair source → say in-place repair install | `DismErrors` maps 0x800F081F / 0x800F0915 / 0x800F0906 to "an in-place repair install is the fix"; "not repairable" finding says the same. | `Dism_failures_are_explained`, scenario Nov 17 |
 
-- **Warn**: tray icon + toast when the verdict worsens.
-- **Auto-pause updates** (opt-in, default off): when the verdict is *Caution* or worse, pause updates
-  for N days (default 7) the same way the Settings app does (`HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`
-  `Pause*` values), so Windows doesn't force a restart onto a broken state. One-click resume.
-- **Shutdown guard** (opt-in): on *Don't restart yet*, register a shutdown block reason
-  (`ShutdownBlockReasonCreate`) so a user-initiated restart shows "WU Health Guard: servicing is in
-  progress" and can be cancelled. Best-effort: Windows can override it.
+### The CHROMAZERO incident, step by step
 
-## 4. Fixes
+| Step | What the app shows / does | Test |
+|------|---------------------------|------|
+| Nov 9–15: rollup half installed, PC only shut down | Yellow: "3 update packages waiting 5 days for a restart" + "Fast Startup is keeping updates from finishing"; offers Turn off Fast Startup. | `Nov15_…` |
+| Nov 16: pending.xml renamed to escape the loop | Red: packages stuck in Install/Uninstall Pending, pending.xml missing, pending.old leftover. Offers Pause updates. Never offers renaming pending.xml or removing the permanent rollup. | `Nov16_…` |
+| Nov 17: DISM 3017, then 0x800F0915 | Failure explained: "Use Restart, not Shut down" / "in-place repair install is the fix". | `Nov17_…` (both) |
+| Nov 18: cache reset, KB5132061 staged cleanly | **Still red**, because the old packages are stuck. The restart is held, auto-pause kicks in, and clearing the cache is refused while red. This is the restart that would have been prevented. | `Nov18_…` (both) |
+| WinRE: remove-package 0x800F0825 | Remove-package is never offered for RollupFix / servicing stack packages; the error is explained if it happens. | `Remove_package_is_not_offered_for_permanent_rollups` |
+| After System Restore: flags set, packages odd, paused to Dec 16 | Red. "Clear stale restart flag" is not offered (it would hide the stuck packages); "Pause" is not offered (already paused); the existing pause isn't changed. | `After_system_restore_…` |
 
-Every fix run is logged (JSON lines, `%ProgramData%\WuHealthGuard\logs`). **Risky** fixes also need
-explicit confirmation and take a backup first (system restore point + `reg export` of touched keys + copies
-of touched files, under `%ProgramData%\WuHealthGuard\backups\<timestamp>-<fix>`). If the backup fails,
-the fix does not run.
+### Deliberately not done
 
-| Fix | Risk | What it does |
-|-----|------|--------------|
-| Restart Windows Update services | Safe | Restart `wuauserv`, `bits`, `cryptsvc`. |
-| Repair component store | Safe | `DISM /Online /Cleanup-Image /RestoreHealth`. |
-| System file check | Safe | `sfc /scannow`. |
-| Reset update download cache | Risky | Stop services, rename `SoftwareDistribution` and `catroot2` to `*.wuhg-<ts>`, restart services. |
-| Clear stale reboot flags | Risky | `reg export`, then delete the stale flag keys. |
-| Set aside stale pending.xml | Risky | Take ownership, rename to `pending.xml.wuhg-<ts>`. Shown with a strong warning; recommend `DISM /Image:C:\ /Cleanup-Image /RevertPendingActions` from WinRE as the alternative. |
-| Remove stuck package | Risky | `DISM /Online /Remove-Package /PackageName:<name>`. |
+- **No pending.xml delete/rename fix.** It's what got CHROMAZERO booting on Nov 16, and also what left the
+  packages stuck halfway for the Nov 18 loop. A booted PC never needs it; the app recommends System Restore or
+  an in-place repair install instead.
+- **No deleting CBS package keys or editing their states.** No backup makes that safe.
+- **No automatic DISM repair.** It writes to WinSxS, so it's a confirmed, backed-up fix.
 
-## 5. Architecture
+## 3. Architecture
 
 ```
 src/
-  WuHealthGuard.Core       net10.0           Model, checks, verdict, guard policy, fix runner, fixes.
-                                             No Windows APIs: everything goes through interfaces.
-  WuHealthGuard.Windows    net10.0-windows   Real adapters: registry (incl. key last-write time),
-                                             DISM API, WUA COM, services, processes, restore points,
-                                             update pause, logging.
-  WuHealthGuard.Tray       net10.0-windows   WinForms NotifyIcon app, report window, settings,
-                                             scheduler, toasts, shutdown guard.
+  WuHealthGuard.Core       net10.0           Checks, verdict, guard policy, fix runner, fixes. No Windows APIs.
+  WuHealthGuard.Windows    net10.0-windows   Registry (incl. key last-write times), DISM API, WUA COM,
+                                             services, processes, restore points, reg export, update pause,
+                                             JSONL action log.
+  WuHealthGuard.Tray       net10.0-windows   WinForms tray app, report window, shutdown guard, logon task.
 tests/
-  WuHealthGuard.Core.Tests xunit, runs on Linux/Windows with fakes.
+  WuHealthGuard.Core.Tests xunit with in-memory fakes; runs on any OS.
 ```
 
-**Elevation**: the checks (DISM API, some registry) and all fixes need admin. v1 runs the tray app
-elevated, started at logon by a scheduled task with "run with highest privileges" (no UAC prompt each
-logon). A split "unelevated tray + elevated service" is a possible v2.
+**"Before the last boot"** is the core signal. Boot time is the kernel boot (tick count). With Fast Startup a
+Shut down doesn't change it, which is correct: only a real restart processes pending servicing.
 
-**Distribution**: self-contained single-file `win-x64` (and `win-arm64`) publish; `--install` /
-`--uninstall` switches register/remove the logon task.
+**Elevation**: the app runs elevated, started at logon by a "run with highest privileges" scheduled task
+(`--install`), so there's no UAC prompt each logon.
 
-## 6. Phases
+**Data**: `%ProgramData%\WuHealthGuard\` holds `settings.json`, `logs\actions-yyyy-MM.jsonl` and `backups\`.
 
-1. **Foundation** — plan, solution, CI (Windows runner), core model, all checks against fakes,
-   verdict + auto-pause policy, fix runner (confirm → backup → apply → log), unit tests. ✅ *done*
-2. **Windows adapters** — registry reader with `RegQueryInfoKey` last-write times, boot time, DISM API
-   probe, WUA history, process/service control, restore points, `reg export`, pause controller.
-   🟡 *written and compiling; not yet run on Windows*
-3. **Tray app** — icon states, menu, report window with per-finding fixes, settings (JSON), periodic
-   scan (hourly + on resume), balloon notifications, shutdown guard, `--install` logon task.
-   🟡 *skeleton written and compiling; not yet run on Windows. Still to do: settings window, scan on
-   WU state change, proper icon assets.*
-4. **Fixes** — implement and test each fix end-to-end in a VM.
-5. **Packaging** — single-file publish, install/uninstall, code signing, README with screenshots.
+## 4. Phases
 
-## 7. Testing on real Windows
+1. **Core** — checks, verdict, guard policy, fix runner, fixes, unit + incident scenario tests. ✅ done
+2. **Windows adapters** — 🟡 written and compiling; not yet run on Windows.
+3. **Tray app** — 🟡 written and compiling; not yet run on Windows. Still to do: settings window, scan on
+   WU state change, proper icon assets.
+4. **VM validation** — §5.
+5. **Packaging** — single-file publish, signing, screenshots.
 
-Unit tests cover the decision logic. The OS-facing parts need a VM matrix (Windows 10 22H2,
-Windows 11 24H2/25H2, x64 + one arm64) with snapshots, and scripted scenarios:
+## 5. Validation on real Windows
 
-- Fresh LCU installed, not restarted → expect *Restart recommended*.
-- Set a CBS package's `CurrentState` to `0x60` and reboot → expect *stuck* → red.
-- Leave a dummy `pending.xml` across a reboot (snapshot first!) → red.
-- Corrupt the component store flag (or use a known-bad image) → yellow/red.
-- Force an update failure (e.g. block the download host) → yellow.
+Unit tests cover the decisions. The OS-facing parts need a VM (Windows 11 24H2/25H2 and the 26H2 build
+CHROMAZERO runs, plus Windows 10 22H2), with snapshots:
 
-## 8. Open questions
+- Fresh cumulative update installed, not restarted → green ("will finish during restart").
+- Fast Startup on, update staged, shut down/power on for 4 days → yellow, Fast Startup warning.
+- Set a package's `CurrentState` to `0x60` and restart → red, stuck.
+- Rename pending.xml with packages pending (snapshot first!) → red, missing.
+- Start a restart while red → the shutdown block screen shows the reason.
+- Auto-pause on + red → Settings > Windows Update shows paused.
+- Each fix end to end, checking the log and the backup folder.
 
-- Elevation model (§5): elevated tray via scheduled task is the v1 default.
-- Auto-pause default: off, opt-in. Pause length default 7 days.
-- Which risky fixes ship in v1? `pending.xml` and package removal are the most dangerous; they could
-  stay "guidance only" until VM-tested.
-- Localization: v1 English only; detection doesn't parse localized tool output (uses registry and APIs).
+Values to confirm on real machines: CBS `CurrentState` codes (`0x60`, `0x05`, `0x10`, `0x30`), that the
+UX\Settings pause values are honoured, whether Administrators can delete CBS reboot flag keys, and that a
+tray-only app's shutdown block reason is shown.
+
+## 6. Open questions
+
+- Auto-pause is opt-in. Should it be on by default, given the incident?
+- Restore points are required for risky fixes; that blocks them when System Protection is off.
+- English only for now. Detection doesn't parse localized tool output (registry and APIs only).

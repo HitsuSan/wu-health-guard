@@ -42,7 +42,7 @@ public static class RestartVerdictText
     public static string Headline(this RestartVerdict verdict) => verdict switch
     {
         RestartVerdict.SafeToRestart => "Safe to restart",
-        RestartVerdict.RestartRecommended => "Restart recommended to finish updates",
+        RestartVerdict.RestartRecommended => "Safe to restart: updates will finish during the restart",
         RestartVerdict.Caution => "Caution: fix update problems before restarting",
         RestartVerdict.DoNotRestart => "Don't restart yet",
         _ => verdict.ToString(),

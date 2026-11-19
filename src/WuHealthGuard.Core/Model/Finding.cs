@@ -58,4 +58,6 @@ public static class FindingDataKeys
     public const string UpdateId = "UpdateId";
     public const string KbArticle = "KB";
     public const string Count = "Count";
+    public const string Since = "Since";
+    public const string Age = "Age";
 }

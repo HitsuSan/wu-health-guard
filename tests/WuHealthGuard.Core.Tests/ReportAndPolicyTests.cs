@@ -101,21 +101,33 @@ public class GuardPolicyTests
         Assert.False(GuardPolicy.Decide(Block, null, new GuardSettings(), PauseStatus.NotPaused, T.Now).PauseUpdates);
 
     [Fact]
-    public void Auto_pause_pauses_at_threshold_and_always_notifies()
+    public void Auto_pause_pauses_when_red_and_always_notifies()
     {
         var settings = new GuardSettings { AutoPauseEnabled = true, NotifyOnWorsening = false, PauseDays = 7 };
-        var d = GuardPolicy.Decide(Caution, Caution, settings, PauseStatus.NotPaused, T.Now);
+        var d = GuardPolicy.Decide(Block, Block, settings, PauseStatus.NotPaused, T.Now);
         Assert.True(d.PauseUpdates);
         Assert.True(d.Notify);
         Assert.Equal(T.Now.AddDays(7), d.PauseUntil);
     }
 
     [Fact]
+    public void Auto_pause_does_not_trigger_on_yellow_by_default() =>
+        Assert.False(GuardPolicy.Decide(Caution, null, new GuardSettings { AutoPauseEnabled = true }, PauseStatus.NotPaused, T.Now).PauseUpdates);
+
+    [Fact]
+    public void Auto_pause_pauses_again_when_a_pause_ran_out_and_it_is_still_red()
+    {
+        var settings = new GuardSettings { AutoPauseEnabled = true };
+        var expired = new PauseStatus(false, T.Now.AddDays(-1));
+        Assert.True(GuardPolicy.Decide(Block, Block, settings, expired, T.Now).PauseUpdates);
+    }
+
+    [Fact]
     public void Auto_pause_respects_threshold()
     {
-        var settings = new GuardSettings { AutoPauseEnabled = true, AutoPauseAt = RestartVerdict.DoNotRestart };
-        Assert.False(GuardPolicy.Decide(Caution, null, settings, PauseStatus.NotPaused, T.Now).PauseUpdates);
-        Assert.True(GuardPolicy.Decide(Block, null, settings, PauseStatus.NotPaused, T.Now).PauseUpdates);
+        var settings = new GuardSettings { AutoPauseEnabled = true, AutoPauseAt = RestartVerdict.Caution };
+        Assert.False(GuardPolicy.Decide(Safe, null, settings, PauseStatus.NotPaused, T.Now).PauseUpdates);
+        Assert.True(GuardPolicy.Decide(Caution, null, settings, PauseStatus.NotPaused, T.Now).PauseUpdates);
     }
 
     [Fact]

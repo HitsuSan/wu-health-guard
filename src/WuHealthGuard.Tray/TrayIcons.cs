@@ -22,10 +22,10 @@ internal static class TrayIcons
 
     public static Icon Unknown => _unknown ??= Draw(System.Drawing.Color.Gray);
 
+    /// <summary>Three lights: green (safe, including "updates will finish during the restart"), yellow, red.</summary>
     public static Color Color(RestartVerdict verdict) => verdict switch
     {
-        RestartVerdict.SafeToRestart => System.Drawing.Color.FromArgb(0x2E, 0x9E, 0x44),
-        RestartVerdict.RestartRecommended => System.Drawing.Color.FromArgb(0x1F, 0x6F, 0xD1),
+        RestartVerdict.SafeToRestart or RestartVerdict.RestartRecommended => System.Drawing.Color.FromArgb(0x2E, 0x9E, 0x44),
         RestartVerdict.Caution => System.Drawing.Color.FromArgb(0xE0, 0xA1, 0x00),
         RestartVerdict.DoNotRestart => System.Drawing.Color.FromArgb(0xD1, 0x24, 0x2F),
         _ => System.Drawing.Color.Gray,

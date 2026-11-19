@@ -4,10 +4,14 @@ namespace WuHealthGuard.Core.Guard;
 
 public sealed record GuardSettings
 {
-    /// <summary>Pause Windows Update automatically when the verdict reaches <see cref="AutoPauseAt"/>. Off by default.</summary>
+    /// <summary>
+    /// Pause Windows Update automatically while the verdict is at <see cref="AutoPauseAt"/> or worse. Off by default.
+    /// When a pause expires and the light is still red, the next scan pauses again.
+    /// </summary>
     public bool AutoPauseEnabled { get; init; }
 
-    public RestartVerdict AutoPauseAt { get; init; } = RestartVerdict.Caution;
+    /// <summary>Red by default: don't let Windows stage more work on top of a stuck servicing state.</summary>
+    public RestartVerdict AutoPauseAt { get; init; } = RestartVerdict.DoNotRestart;
 
     public int PauseDays { get; init; } = 7;
 

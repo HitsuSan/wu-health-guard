@@ -20,9 +20,10 @@ public sealed class WindowsComposition : IDisposable
         Scanner = new HealthScanner(
             [
                 new ServicingActivityCheck(Processes),
-                new CbsPendingPackagesCheck(Registry, System),
-                new PendingXmlCheck(Files, System),
+                new CbsPendingPackagesCheck(Registry, System, Time),
+                new PendingXmlCheck(Files, Registry, System, Time),
                 new RebootFlagsCheck(Registry, System),
+                new FastStartupCheck(Registry, Time),
                 ComponentStore,
                 new FailedUpdatesCheck(new WuaUpdateHistoryProvider(), Time),
             ],
@@ -51,14 +52,19 @@ public sealed class WindowsComposition : IDisposable
 
     public HealthScanner Scanner { get; }
 
-    public FixRunner CreateFixRunner(IConfirmationPrompt prompt, bool requireRestorePoint = true) => new(
+    /// <param name="pauseDays">Read each time the pause fix runs, so it follows the current settings.</param>
+    public FixRunner CreateFixRunner(IConfirmationPrompt prompt, Func<int> pauseDays, bool requireRestorePoint = true) => new(
         [
+            // Safe: one click.
+            new PauseUpdatesFix(PauseController, Time, pauseDays),
+            new TurnOffFastStartupFix(Registry, Registry),
             new RestartUpdateServicesFix(Services),
-            new DismRestoreHealthFix(Processes),
-            new SfcScanNowFix(Processes),
             new ResetUpdateCacheFix(Services, Files, System),
+            new SfcScanNowFix(Processes),
+
+            // Risky: confirmation + backup.
+            new DismRestoreHealthFix(Processes),
             new ClearStaleRebootFlagsFix(Registry),
-            new SetAsidePendingXmlFix(Processes, Files, System),
             new RemoveStuckPackageFix(Processes),
         ],
         prompt,

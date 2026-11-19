@@ -7,11 +7,13 @@ namespace WuHealthGuard.Core.Tests;
 
 public class CbsPendingPackagesCheckTests
 {
-    private const string Pkg = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.2033.1.7";
+    private const string Pkg = "Package_for_KB5070001~31bf3856ad364e35~amd64~~26100.2033.1.7";
 
-    private static FakeRegistry Packages(params (string Name, int State, DateTimeOffset? Written)[] packages)
+    internal static FakeRegistry Packages(params (string Name, int State, DateTimeOffset? Written)[] packages) =>
+        AddPackages(new FakeRegistry().AddKey(RegistryPaths.CbsPackages), packages);
+
+    internal static FakeRegistry AddPackages(FakeRegistry reg, params (string Name, int State, DateTimeOffset? Written)[] packages)
     {
-        var reg = new FakeRegistry().AddKey(RegistryPaths.CbsPackages);
         foreach (var (name, state, written) in packages)
         {
             reg.AddKey($@"{RegistryPaths.CbsPackages}\{name}", written, ("CurrentState", state));
@@ -21,7 +23,7 @@ public class CbsPendingPackagesCheckTests
     }
 
     private static Task<IReadOnlyList<Finding>> Run(FakeRegistry reg, FakeSystem? sys = null) =>
-        new CbsPendingPackagesCheck(reg, sys ?? new FakeSystem()).RunAsync(CancellationToken.None);
+        new CbsPendingPackagesCheck(reg, sys ?? new FakeSystem(), new FakeTime(T.Now)).RunAsync(CancellationToken.None);
 
     [Fact]
     public async Task Installed_packages_produce_no_findings()
@@ -45,17 +47,33 @@ public class CbsPendingPackagesCheckTests
     [Theory]
     [InlineData(CbsPackageState.InstallPending, "Install Pending")]
     [InlineData(CbsPackageState.UninstallPending, "Uninstall Pending")]
-    public async Task Pending_from_before_last_boot_is_stuck(int state, string label)
+    public async Task Pending_from_before_last_boot_is_stuck_and_says_how_long(int state, string label)
     {
-        var findings = await Run(Packages((Pkg, state, T.BeforeBoot)));
+        var findings = await Run(Packages((Pkg, state, T.Now.AddDays(-9))));
 
         var f = Assert.Single(findings);
         Assert.Equal(CbsPendingPackagesCheck.StuckCode, f.Code);
         Assert.Equal(Severity.Critical, f.Severity);
         Assert.Equal(RestartImpact.Block, f.Impact);
-        Assert.Contains(label, f.Title, StringComparison.Ordinal);
+        Assert.Equal($"1 package stuck in {label} for 9 days", f.Title);
+        Assert.Equal("9 days", f.Data[FindingDataKeys.Age]);
         Assert.Equal(Pkg, f.Data[FindingDataKeys.PackageName]);
-        Assert.Contains(FixIds.RemoveStuckPackage, f.SuggestedFixIds);
+        Assert.Equal([FixIds.PauseUpdates, FixIds.DismRestoreHealth, FixIds.RemoveStuckPackage], f.SuggestedFixIds);
+    }
+
+    [Fact]
+    public async Task Stuck_packages_are_grouped_by_state_and_package_name_only_given_for_one()
+    {
+        var findings = await Run(Packages(
+            ("A~0~x~~1", CbsPackageState.InstallPending, T.BeforeBoot),
+            ("B~0~x~~1", CbsPackageState.InstallPending, T.BeforeBoot),
+            ("C~0~x~~1", CbsPackageState.UninstallPending, T.BeforeBoot)));
+
+        Assert.Equal(2, findings.Count);
+        var install = Assert.Single(findings, f => f.Title.Contains("Install Pending", StringComparison.Ordinal));
+        Assert.Equal("2", install.Data[FindingDataKeys.Count]);
+        Assert.False(install.Data.ContainsKey(FindingDataKeys.PackageName));
+        Assert.True(Assert.Single(findings, f => f.Title.Contains("Uninstall", StringComparison.Ordinal)).Data.ContainsKey(FindingDataKeys.PackageName));
     }
 
     [Fact]
@@ -68,23 +86,31 @@ public class CbsPendingPackagesCheckTests
     [Fact]
     public async Task Unknown_boot_time_never_reports_stuck()
     {
-        var findings = await Run(Packages((Pkg, CbsPackageState.InstallPending, T.BeforeBoot)), new FakeSystem { LastBootTime = null });
+        var findings = await Run(Packages((Pkg, CbsPackageState.InstallPending, T.AfterBoot)), new FakeSystem { LastBootTime = null });
         Assert.Equal(CbsPendingPackagesCheck.PendingCode, Assert.Single(findings).Code);
     }
 
     [Fact]
-    public async Task Mixed_packages_give_one_finding_per_stuck_package_plus_one_summary()
+    public async Task Pending_for_days_without_a_restart_is_a_warning()
     {
-        var findings = await Run(Packages(
-            ("A~0~x~~1", CbsPackageState.InstallPending, T.BeforeBoot),
-            ("B~0~x~~1", CbsPackageState.UninstallPending, T.BeforeBoot),
-            ("C~0~x~~1", CbsPackageState.InstallPending, T.AfterBoot),
-            ("D~0~x~~1", CbsPackageState.InstallPending, T.AfterBoot),
-            ("E~0~x~~1", CbsPackageState.Installed, T.AfterBoot)));
+        // Fast Startup: the machine was "shut down" every night but hasn't really booted for 10 days.
+        var sys = new FakeSystem { LastBootTime = T.Now.AddDays(-10) };
+        var findings = await Run(Packages((Pkg, CbsPackageState.InstallPending, T.Now.AddDays(-5))), sys);
 
-        Assert.Equal(2, findings.Count(f => f.Code == CbsPendingPackagesCheck.StuckCode));
-        var summary = Assert.Single(findings, f => f.Code == CbsPendingPackagesCheck.PendingCode);
-        Assert.Equal("2", summary.Data[FindingDataKeys.Count]);
+        var f = Assert.Single(findings);
+        Assert.Equal(CbsPendingPackagesCheck.PendingTooLongCode, f.Code);
+        Assert.Equal(RestartImpact.Caution, f.Impact);
+        Assert.Contains("5 days", f.Title, StringComparison.Ordinal);
+        Assert.Contains("Fast Startup", f.Detail, StringComparison.Ordinal);
+        Assert.Contains(FixIds.TurnOffFastStartup, f.SuggestedFixIds);
+    }
+
+    [Fact]
+    public async Task Transitional_state_after_restart_is_odd()
+    {
+        var f = Assert.Single(await Run(Packages((Pkg, CbsPackageState.Staging, T.BeforeBoot))));
+        Assert.Equal(CbsPendingPackagesCheck.OddStateCode, f.Code);
+        Assert.Equal(RestartImpact.Caution, f.Impact);
     }
 
     [Fact]
@@ -94,6 +120,14 @@ public class CbsPendingPackagesCheckTests
             .AddKey($@"{RegistryPaths.CbsPackages}\NoState", T.BeforeBoot)
             .AddKey($@"{RegistryPaths.CbsPackages}\Weird", T.BeforeBoot, ("CurrentState", "0x60"));
         Assert.Empty(await Run(reg));
+    }
+
+    [Fact]
+    public void Rollups_and_servicing_stacks_are_permanent()
+    {
+        Assert.True(CbsPackages.IsPermanent("Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9818.1.8"));
+        Assert.True(CbsPackages.IsPermanent("Package_for_ServicingStack_9810~31bf3856ad364e35~amd64~~26100.9810.1.1"));
+        Assert.False(CbsPackages.IsPermanent(Pkg));
     }
 }
 
@@ -159,13 +193,15 @@ public class RebootFlagsCheckTests
 
 public class PendingXmlCheckTests
 {
-    private const string Path = @"C:\Windows\WinSxS\pending.xml";
+    private const string WinSxS = @"C:\Windows\WinSxS";
+    private const string Path = WinSxS + @"\pending.xml";
+    private const string Pkg = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9818.1.8";
 
-    private static Task<IReadOnlyList<Finding>> Run(FakeFiles files) =>
-        new PendingXmlCheck(files, new FakeSystem()).RunAsync(CancellationToken.None);
+    private static Task<IReadOnlyList<Finding>> Run(FakeFiles files, FakeRegistry? reg = null) =>
+        new PendingXmlCheck(files, reg ?? new FakeRegistry(), new FakeSystem(), new FakeTime(T.Now)).RunAsync(CancellationToken.None);
 
     [Fact]
-    public async Task No_file_no_findings() => Assert.Empty(await Run(new FakeFiles()));
+    public async Task No_file_and_nothing_pending_no_findings() => Assert.Empty(await Run(new FakeFiles()));
 
     [Fact]
     public async Task Fresh_pending_xml_means_restart_needed()
@@ -176,21 +212,87 @@ public class PendingXmlCheckTests
     }
 
     [Fact]
-    public async Task Pending_xml_older_than_boot_blocks_restart()
+    public async Task Pending_xml_older_than_boot_blocks_restart_and_never_offers_renaming_it()
     {
         var f = Assert.Single(await Run(new FakeFiles().Add(Path, T.BeforeBoot)));
         Assert.Equal(PendingXmlCheck.StaleCode, f.Code);
         Assert.Equal(Severity.Critical, f.Severity);
         Assert.Equal(RestartImpact.Block, f.Impact);
-        Assert.Contains(FixIds.SetAsidePendingXml, f.SuggestedFixIds);
+        Assert.Equal([FixIds.PauseUpdates], f.SuggestedFixIds);
+        Assert.Contains("Don't delete or rename", f.Detail, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Bad_file_is_informational()
+    public async Task Missing_while_packages_are_pending_blocks_restart()
     {
-        var f = Assert.Single(await Run(new FakeFiles().Add(Path + ".bad", T.BeforeBoot)));
-        Assert.Equal(PendingXmlCheck.BadCode, f.Code);
+        var reg = CbsPendingPackagesCheckTests.Packages((Pkg, CbsPackageState.InstallPending, T.BeforeBoot));
+        var findings = await Run(new FakeFiles().Add(WinSxS + @"\pending.old", T.BeforeBoot), reg);
+
+        var missing = Assert.Single(findings, f => f.Code == PendingXmlCheck.MissingCode);
+        Assert.Equal(RestartImpact.Block, missing.Impact);
+        Assert.Contains("pending.old", missing.Detail, StringComparison.Ordinal);
+        Assert.Contains(FixIds.PauseUpdates, missing.SuggestedFixIds);
+        Assert.Single(findings, f => f.Code == PendingXmlCheck.LeftoverCode);
+    }
+
+    [Fact]
+    public async Task Missing_is_not_reported_while_an_install_is_just_starting()
+    {
+        var reg = CbsPendingPackagesCheckTests.Packages((Pkg, CbsPackageState.InstallPending, T.Now.AddMinutes(-5)));
+        Assert.Empty(await Run(new FakeFiles(), reg));
+    }
+
+    [Fact]
+    public async Task Leftover_files_are_informational()
+    {
+        var f = Assert.Single(await Run(new FakeFiles().Add(Path + ".bad", T.BeforeBoot).Add(WinSxS + @"\pending.old", T.BeforeBoot)));
+        Assert.Equal(PendingXmlCheck.LeftoverCode, f.Code);
         Assert.Equal(RestartImpact.None, f.Impact);
+        Assert.Contains("pending.old", f.Detail, StringComparison.Ordinal);
+        Assert.Contains("pending.xml.bad", f.Detail, StringComparison.Ordinal);
+    }
+}
+
+public class FastStartupCheckTests
+{
+    private static FakeRegistry FastStartup(bool hiberboot, int? hibernate = null)
+    {
+        var reg = new FakeRegistry().AddKey(RegistryPaths.SessionManagerPower, null, (RegistryPaths.HiberbootEnabled, hiberboot ? 1 : 0));
+        if (hibernate is { } h)
+        {
+            reg.AddKey(RegistryPaths.Power, null, (RegistryPaths.HibernateEnabled, h));
+        }
+
+        return reg;
+    }
+
+    private static Task<IReadOnlyList<Finding>> Run(FakeRegistry reg) =>
+        new FastStartupCheck(reg, new FakeTime(T.Now)).RunAsync(CancellationToken.None);
+
+    [Fact]
+    public async Task Off_is_fine() => Assert.Empty(await Run(FastStartup(false)));
+
+    [Fact]
+    public async Task Hibernation_off_means_fast_startup_is_inactive() => Assert.Empty(await Run(FastStartup(true, hibernate: 0)));
+
+    [Fact]
+    public async Task On_is_informational_with_a_fix()
+    {
+        var f = Assert.Single(await Run(FastStartup(true)));
+        Assert.Equal(FastStartupCheck.OnCode, f.Code);
+        Assert.Equal(RestartImpact.None, f.Impact);
+        Assert.Equal([FixIds.TurnOffFastStartup], f.SuggestedFixIds);
+    }
+
+    [Fact]
+    public async Task On_with_long_pending_updates_is_a_warning()
+    {
+        var reg = CbsPendingPackagesCheckTests.AddPackages(FastStartup(true, hibernate: 1),
+            ("Package_for_KB1~31bf3856ad364e35~amd64~~1.0", CbsPackageState.InstallPending, T.Now.AddDays(-7)));
+        var f = Assert.Single(await Run(reg));
+        Assert.Equal(FastStartupCheck.BlockingUpdatesCode, f.Code);
+        Assert.Equal(RestartImpact.Caution, f.Impact);
+        Assert.Contains("3017", f.Detail, StringComparison.Ordinal);
     }
 }
 

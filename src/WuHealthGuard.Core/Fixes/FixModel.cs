@@ -4,12 +4,13 @@ namespace WuHealthGuard.Core.Fixes;
 
 public static class FixIds
 {
+    public const string PauseUpdates = "pause-updates";
+    public const string TurnOffFastStartup = "turn-off-fast-startup";
     public const string RestartUpdateServices = "restart-wu-services";
     public const string DismRestoreHealth = "dism-restorehealth";
     public const string SfcScanNow = "sfc-scannow";
     public const string ResetUpdateCache = "reset-update-cache";
     public const string ClearStaleRebootFlags = "clear-stale-reboot-flags";
-    public const string SetAsidePendingXml = "set-aside-pending-xml";
     public const string RemoveStuckPackage = "remove-stuck-package";
 }
 
@@ -56,8 +57,11 @@ public interface IFix
 
     FixRisk Risk { get; }
 
-    /// <summary>Null if the fix can run for this finding (or with no finding); otherwise the reason it can't.</summary>
-    string? CannotApplyReason(Finding? finding);
+    /// <summary>
+    /// Null if the fix can run; otherwise the reason it can't. <paramref name="report"/> is the latest scan, so a fix
+    /// can refuse to run in a state where it would make things worse.
+    /// </summary>
+    string? CannotApplyReason(Finding? finding, HealthReport? report);
 
     /// <summary>What must be backed up before running. Empty for most safe fixes.</summary>
     IReadOnlyList<BackupItem> GetBackupPlan(Finding? finding);

@@ -17,6 +17,7 @@ internal sealed class ReportForm : Form
     private readonly Button _rescanButton = new() { Text = "Check again", AutoSize = true };
     private readonly Button _deepButton = new() { Text = "Full component store scan", AutoSize = true };
     private readonly ToolTip _tips = new();
+    private HealthReport? _report;
     private bool _busy;
 
     public ReportForm(FixRunner fixes, Func<bool, Task> rescan)
@@ -60,6 +61,7 @@ internal sealed class ReportForm : Form
 
     public void ShowReport(HealthReport report)
     {
+        _report = report;
         var verdict = report.Verdict;
         _headline.Text = verdict.Headline();
         _headline.BackColor = TrayIcons.Color(verdict);
@@ -105,7 +107,7 @@ internal sealed class ReportForm : Form
         {
             case Finding finding:
                 _detail.Text = Describe(finding);
-                foreach (var fix in _fixes.FixesFor(finding))
+                foreach (var fix in _fixes.FixesFor(finding, _report))
                 {
                     var button = new Button
                     {
@@ -147,7 +149,7 @@ internal sealed class ReportForm : Form
     private async Task RunFixAsync(IFix fix, Finding finding)
     {
         FixRunResult? result = null;
-        await RunBusyAsync(async () => result = await _fixes.RunAsync(fix.Id, finding), $"Running: {fix.Title}…");
+        await RunBusyAsync(async () => result = await _fixes.RunAsync(fix.Id, finding, _report), $"Running: {fix.Title}…");
         if (result is null)
         {
             return;

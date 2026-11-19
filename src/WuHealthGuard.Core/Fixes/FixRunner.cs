@@ -33,17 +33,18 @@ public sealed class FixRunner(
     public IFix? Find(string fixId) => _fixes.GetValueOrDefault(fixId);
 
     /// <summary>The fixes suggested by a finding that exist and can apply to it, in suggestion order.</summary>
-    public IReadOnlyList<IFix> FixesFor(Finding finding)
+    public IReadOnlyList<IFix> FixesFor(Finding finding, HealthReport? report = null)
     {
         ArgumentNullException.ThrowIfNull(finding);
         return finding.SuggestedFixIds
             .Select(Find)
             .OfType<IFix>()
-            .Where(f => f.CannotApplyReason(finding) is null)
+            .Where(f => f.CannotApplyReason(finding, report) is null)
             .ToList();
     }
 
-    public async Task<FixRunResult> RunAsync(string fixId, Finding? finding, CancellationToken cancellationToken = default)
+    /// <param name="report">The latest scan. Pass it whenever there is one, so fixes can refuse unsafe states.</param>
+    public async Task<FixRunResult> RunAsync(string fixId, Finding? finding, HealthReport? report = null, CancellationToken cancellationToken = default)
     {
         if (Find(fixId) is not { } fix)
         {
@@ -52,7 +53,7 @@ public sealed class FixRunner(
         }
 
         var target = finding is null ? "" : $" for {finding.Code}";
-        if (fix.CannotApplyReason(finding) is { } reason)
+        if (fix.CannotApplyReason(finding, report) is { } reason)
         {
             log.Write(ActionLogLevel.Warning, $"Not applicable{target}: {reason}", fix.Id);
             return new FixRunResult(FixRunStatus.NotApplicable, reason);

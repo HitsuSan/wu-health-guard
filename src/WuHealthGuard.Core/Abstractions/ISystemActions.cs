@@ -34,4 +34,7 @@ public interface IRegistryWriter
 {
     /// <summary>Deletes a key and its subtree. No-op if it doesn't exist.</summary>
     void DeleteKeyTree(string path);
+
+    /// <summary>Writes a DWORD value, creating the key if needed.</summary>
+    void SetDword(string path, string valueName, int value);
 }

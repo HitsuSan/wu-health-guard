@@ -125,7 +125,7 @@ public class CbsPendingPackagesCheckTests
     [Fact]
     public void Rollups_and_servicing_stacks_are_permanent()
     {
-        Assert.True(CbsPackages.IsPermanent("Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9818.1.8"));
+        Assert.True(CbsPackages.IsPermanent("Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.4000.1.8"));
         Assert.True(CbsPackages.IsPermanent("Package_for_ServicingStack_9810~31bf3856ad364e35~amd64~~26100.9810.1.1"));
         Assert.False(CbsPackages.IsPermanent(Pkg));
     }
@@ -195,7 +195,7 @@ public class PendingXmlCheckTests
 {
     private const string WinSxS = @"C:\Windows\WinSxS";
     private const string Path = WinSxS + @"\pending.xml";
-    private const string Pkg = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9818.1.8";
+    private const string Pkg = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.4000.1.8";
 
     private static Task<IReadOnlyList<Finding>> Run(FakeFiles files, FakeRegistry? reg = null) =>
         new PendingXmlCheck(files, reg ?? new FakeRegistry(), new FakeSystem(), new FakeTime(T.Now)).RunAsync(CancellationToken.None);

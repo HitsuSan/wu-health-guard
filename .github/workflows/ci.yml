@@ -20,13 +20,25 @@ jobs:
       - name: Test
         run: dotnet test WuHealthGuard.slnx -c Release --no-build
 
-      - name: Publish (win-x64, single file)
+      - name: Publish (win-x64, framework-dependent single file)
         run: >
           dotnet publish src/WuHealthGuard.Tray/WuHealthGuard.Tray.csproj -c Release -r win-x64
-          --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-          -o publish/win-x64
+          --no-self-contained -p:PublishSingleFile=true -p:DebugType=none -o publish
+
+      - name: Build installer
+        shell: pwsh
+        run: ./installer/build.ps1 -Exe publish/WuHealthGuard.exe -OutDir publish
+
+      # The installer downloads the runtime from this Microsoft link; fail early if it ever stops working.
+      - name: Check .NET runtime download link
+        shell: pwsh
+        run: |
+          $r = Invoke-WebRequest -Method Head -Uri https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe -MaximumRedirection 5 -UseBasicParsing
+          if ($r.StatusCode -ne 200) { throw "Runtime download link returned $($r.StatusCode)." }
 
       - uses: actions/upload-artifact@v4
         with:
           name: WuHealthGuard-win-x64
-          path: publish/win-x64
+          path: |
+            publish/WuHealthGuard.exe
+            publish/WuHealthGuardSetup.exe

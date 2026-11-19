@@ -78,3 +78,20 @@ public class UpdateTests
         Assert.False(UpdateRules.HashMatches(new MemoryStream(Encoding.UTF8.GetBytes("exe2")), Hash));
     }
 }
+
+public class UpdateManifestJsonTests
+{
+    [Fact]
+    public void Desktop_runtime_round_trips_and_is_optional()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var withRuntime = new UpdateManifest("0.2.1", "https://x/y.exe", new string('a', 64), 1, null, "sig") { DesktopRuntime = "10" };
+        var json = System.Text.Json.JsonSerializer.Serialize(withRuntime, options);
+        Assert.Contains("\"desktopRuntime\":\"10\"", json, StringComparison.Ordinal);
+        Assert.Equal("10", System.Text.Json.JsonSerializer.Deserialize<UpdateManifest>(json, options)!.DesktopRuntime);
+
+        // Manifests from 0.2.0 have no such field.
+        var old = """{"version":"0.2.0","url":"https://x/y.exe","sha256":"aa","size":1,"notes":null,"signature":"s"}""";
+        Assert.Null(System.Text.Json.JsonSerializer.Deserialize<UpdateManifest>(old, options)!.DesktopRuntime);
+    }
+}

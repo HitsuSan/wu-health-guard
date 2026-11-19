@@ -8,6 +8,7 @@ internal static class Program
     private static int Main(string[] args)
     {
         var command = args.FirstOrDefault()?.ToUpperInvariant();
+        var quiet = args.Skip(1).Any(a => string.Equals(a, "--quiet", StringComparison.OrdinalIgnoreCase));
         string? updatedFrom = null;
 
         switch (command)
@@ -15,9 +16,9 @@ internal static class Program
             case null:
                 break;
             case "--INSTALL":
-                return StartupTask.Install();
+                return StartupTask.Install(quiet);
             case "--UNINSTALL":
-                return StartupTask.Uninstall();
+                return StartupTask.Uninstall(quiet);
             case "--GENERATE-UPDATE-KEY":
                 return GenerateUpdateKey();
             case var c when string.Equals(c, SelfUpdater.AfterUpdateSwitch, StringComparison.OrdinalIgnoreCase):
@@ -79,7 +80,7 @@ internal static class Program
 
     private static int Usage()
     {
-        MessageBox.Show("Usage: WuHealthGuard.exe [--install | --uninstall | --generate-update-key]", "WU Health Guard");
+        MessageBox.Show("Usage: WuHealthGuard.exe [--install [--quiet] | --uninstall [--quiet] | --generate-update-key]", "WU Health Guard");
         return 2;
     }
 }

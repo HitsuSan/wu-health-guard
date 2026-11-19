@@ -12,7 +12,8 @@ internal static class StartupTask
 {
     private const string TaskName = "WU Health Guard";
 
-    public static int Install()
+    /// <param name="quiet">No message boxes; for the installer. The exit code says whether it worked.</param>
+    public static int Install(bool quiet = false)
     {
         var exe = Environment.ProcessPath ?? throw new InvalidOperationException("Can't determine the executable path.");
         var user = WindowsIdentity.GetCurrent().Name;
@@ -43,7 +44,7 @@ internal static class StartupTask
         File.WriteAllText(file, xml, System.Text.Encoding.Unicode);
         try
         {
-            return Schtasks("/Create", "/TN", TaskName, "/XML", file, "/F");
+            return Schtasks(quiet, "/Create", "/TN", TaskName, "/XML", file, "/F");
         }
         finally
         {
@@ -51,9 +52,9 @@ internal static class StartupTask
         }
     }
 
-    public static int Uninstall() => Schtasks("/Delete", "/TN", TaskName, "/F");
+    public static int Uninstall(bool quiet = false) => Schtasks(quiet, "/Delete", "/TN", TaskName, "/F");
 
-    private static int Schtasks(params string[] args)
+    private static int Schtasks(bool quiet, params string[] args)
     {
         var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "schtasks.exe"))
         {
@@ -70,8 +71,12 @@ internal static class StartupTask
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
         process.WaitForExit();
-        MessageBox.Show(output.Trim(), "WU Health Guard", MessageBoxButtons.OK,
-            process.ExitCode == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+        if (!quiet)
+        {
+            MessageBox.Show(output.Trim(), "WU Health Guard", MessageBoxButtons.OK,
+                process.ExitCode == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+        }
+
         return process.ExitCode;
     }
 }

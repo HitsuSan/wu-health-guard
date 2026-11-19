@@ -1,7 +1,7 @@
 # WU Health Guard — Plan
 
-The [README](../README.md) is the spec: what the app checks, what it does, and the CHROMAZERO incident it
-has to prevent. This file says how it's built and where each requirement lives.
+The [README](../README.md) says what the app checks and does. This file says how it's built and where each
+requirement lives.
 
 ## 1. The tray light
 
@@ -16,9 +16,9 @@ existed, the raw evidence (package names, registry keys, HRESULTs) and buttons f
 
 ## 2. Requirement coverage
 
-Every README item and incident step, where it's implemented and which test proves it.
-Tests are in `tests/WuHealthGuard.Core.Tests`; `ChromazeroScenarioTests` replays the incident through the
-full scanner.
+Every README item and boot-loop scenario step, where it's implemented and which test proves it.
+Tests are in `tests/WuHealthGuard.Core.Tests`; `BootLoopScenarioTests` replays a real-world boot-loop
+sequence through the full scanner.
 
 ### What it checks
 
@@ -38,26 +38,28 @@ full scanner.
 |--------|----------------|-------|
 | Tray light green / yellow / red | `TrayIcons`, `HealthReport.Verdict`. | `HealthReportTests` |
 | Warns before a restart or shutdown | `ShutdownGuardWindow`: while red, answers `WM_QUERYENDSESSION` with a block reason so Windows shows "WU Health Guard: …" with Cancel / Restart anyway. **On by default.** Plus a balloon whenever the light gets worse. | VM test (§5) |
-| Pauses Windows Update automatically while red | `GuardPolicy`: opt-in, triggers at red. If a pause runs out while still red, the next scan pauses again; an existing pause is never extended. | `GuardPolicyTests`, scenario Nov 18 |
-| Safe fixes in one click: pause updates, clear download cache, turn off Fast Startup | `PauseUpdatesFix`, `ResetUpdateCacheFix` (renames, never deletes; **refused while red**, see Nov 18), `TurnOffFastStartupFix`; also restart WU services, `sfc /scannow`. | `FixRunnerTests` |
+| Pauses Windows Update automatically while red | `GuardPolicy`: opt-in, triggers at red. If a pause runs out while still red, the next scan pauses again; an existing pause is never extended. | `GuardPolicyTests`, scenario step 4 |
+| Safe fixes in one click: pause updates, clear download cache, turn off Fast Startup | `PauseUpdatesFix`, `ResetUpdateCacheFix` (renames, never deletes; **refused while red**, see scenario step 4), `TurnOffFastStartupFix`; also restart WU services, `sfc /scannow`. | `FixRunnerTests` |
 | Risky fixes (anything touching CBS, WinSxS or pending state) only after confirmation, with backup and log | `FixRunner`: confirm → back up (restore point + `reg export`) → apply → log. A failed backup stops the fix. Risky: DISM RestoreHealth, clear stale reboot flag, remove a stuck package. | `FixRunnerTests` |
-| Limit: no repair source → say in-place repair install | `DismErrors` maps 0x800F081F / 0x800F0915 / 0x800F0906 to "an in-place repair install is the fix"; "not repairable" finding says the same. | `Dism_failures_are_explained`, scenario Nov 17 |
+| Limit: no repair source → say in-place repair install | `DismErrors` maps 0x800F081F / 0x800F0915 / 0x800F0906 to "an in-place repair install is the fix"; "not repairable" finding says the same. | `Dism_failures_are_explained`, scenario step 3 |
 
-### The CHROMAZERO incident, step by step
+### The boot-loop scenario, step by step
+
+A cumulative update half-installs, the PC boot-loops, and the usual recovery attempts make it worse.
 
 | Step | What the app shows / does | Test |
 |------|---------------------------|------|
-| Nov 9–15: rollup half installed, PC only shut down | Yellow: "3 update packages waiting 5 days for a restart" + "Fast Startup is keeping updates from finishing"; offers Turn off Fast Startup. | `Nov15_…` |
-| Nov 16: pending.xml renamed to escape the loop | Red: packages stuck in Install/Uninstall Pending, pending.xml missing, pending.old leftover. Offers Pause updates. Never offers renaming pending.xml or removing the permanent rollup. | `Nov16_…` |
-| Nov 17: DISM 3017, then 0x800F0915 | Failure explained: "Use Restart, not Shut down" / "in-place repair install is the fix". | `Nov17_…` (both) |
-| Nov 18: cache reset, KB5132061 staged cleanly | **Still red**, because the old packages are stuck. The restart is held, auto-pause kicks in, and clearing the cache is refused while red. This is the restart that would have been prevented. | `Nov18_…` (both) |
-| WinRE: remove-package 0x800F0825 | Remove-package is never offered for RollupFix / servicing stack packages; the error is explained if it happens. | `Remove_package_is_not_offered_for_permanent_rollups` |
-| After System Restore: flags set, packages odd, paused to Dec 16 | Red. "Clear stale restart flag" is not offered (it would hide the stuck packages); "Pause" is not offered (already paused); the existing pause isn't changed. | `After_system_restore_…` |
+| 1. Rollup half installed; PC only shut down for days (Fast Startup) | Yellow: "3 update packages waiting 5 days for a restart" + "Fast Startup is keeping updates from finishing"; offers Turn off Fast Startup. | `Days_after_…` |
+| 2. Boot loop; pending.xml renamed to get Windows to boot | Red: packages stuck in Install/Uninstall Pending, pending.xml missing, pending.old leftover. Offers Pause updates. Never offers renaming pending.xml or removing the permanent rollup. | `After_renaming_pending_xml_…` |
+| 3. DISM fails with 3017, then 0x800F0915 | Failure explained: "Use Restart, not Shut down" / "in-place repair install is the fix". | `Dism_…` (both) |
+| 4. Cache reset; the next update downloads and stages cleanly | **Still red**, because the old packages are stuck. The restart is held, auto-pause kicks in, and clearing the cache is refused while red. This is the restart that loops again. | `New_update_…`, `Cache_reset_…` |
+| 5. In WinRE: remove-package fails with 0x800F0825 | Remove-package is never offered for RollupFix / servicing stack packages; the error is explained if it happens. | `Remove_package_is_not_offered_for_permanent_rollups` |
+| 6. After System Restore: flags still set, packages odd, updates paused | Red. "Clear stale restart flag" is not offered (it would hide the stuck packages); "Pause" is not offered (already paused); the existing pause isn't changed. | `After_system_restore_…` |
 
 ### Deliberately not done
 
-- **No pending.xml delete/rename fix.** It's what got CHROMAZERO booting on Nov 16, and also what left the
-  packages stuck halfway for the Nov 18 loop. A booted PC never needs it; the app recommends System Restore or
+- **No pending.xml delete/rename fix.** It can get a looping PC to boot (step 2), but it leaves the packages
+  stuck halfway for the next loop (step 4). A booted PC never needs it; the app recommends System Restore or
   an in-place repair install instead.
 - **No deleting CBS package keys or editing their states.** No backup makes that safe.
 - **No automatic DISM repair.** It writes to WinSxS, so it's a confirmed, backed-up fix.
@@ -104,8 +106,8 @@ Shut down doesn't change it, which is correct: only a real restart processes pen
 
 ## 5. Validation on real Windows
 
-Unit tests cover the decisions. The OS-facing parts need a VM (Windows 11 24H2/25H2 and the 26H2 build
-CHROMAZERO runs, plus Windows 10 22H2), with snapshots:
+Unit tests cover the decisions. The OS-facing parts need a VM (Windows 11 24H2/25H2/26H2 and Windows 10
+22H2), with snapshots:
 
 - Fresh cumulative update installed, not restarted → green ("will finish during restart").
 - Fast Startup on, update staged, shut down/power on for 4 days → yellow, Fast Startup warning.

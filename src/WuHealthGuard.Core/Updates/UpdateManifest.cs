@@ -8,7 +8,15 @@ namespace WuHealthGuard.Core.Updates;
 /// What a release publishes as <c>update.json</c>. <see cref="Signature"/> covers version, URL and hash, so
 /// nobody without the release signing key can make the app install something else.
 /// </summary>
-public sealed record UpdateManifest(string Version, string Url, string Sha256, long Size, string? Notes, string Signature);
+public sealed record UpdateManifest(string Version, string Url, string Sha256, long Size, string? Notes, string Signature)
+{
+    /// <summary>
+    /// Major version of the .NET Desktop Runtime the update needs, e.g. "10". The app won't install an update
+    /// whose runtime isn't present, since it couldn't start. Not signed: tampering can only block an update,
+    /// which withholding the manifest could do anyway.
+    /// </summary>
+    public string? DesktopRuntime { get; init; }
+}
 
 public enum UpdateStatus
 {

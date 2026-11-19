@@ -70,21 +70,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Couldn't read the signing key." }
           "UPDATE_PUBLIC_KEY=$key" >> $env:GITHUB_ENV
 
+      # Framework-dependent (~2 MB): uses the shared .NET Desktop Runtime, which the installer sets up.
       - name: Publish
         run: >
           dotnet publish src/WuHealthGuard.Tray/WuHealthGuard.Tray.csproj -c Release -r win-x64
-          --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          --no-self-contained -p:PublishSingleFile=true
           -p:DebugType=none -p:Version=${{ env.VERSION }}
           "-p:UpdatePublicKey=${{ env.UPDATE_PUBLIC_KEY }}" "-p:UpdateFeedUrl=${{ env.FEED_URL }}"
           -o publish
+
+      - name: Build installer
+        shell: pwsh
+        run: ./installer/build.ps1 -Exe publish/WuHealthGuard.exe -OutDir publish -Version ${{ env.VERSION }}
 
       - name: Sign update manifest
         run: >
           dotnet run --no-build --project tools/WuHealthGuard.ReleaseTool -c Release --
           manifest --file publish/WuHealthGuard.exe --version ${{ env.VERSION }}
-          --url ${{ env.EXE_URL }} --out publish/update.json
+          --url ${{ env.EXE_URL }} --out publish/update.json --desktop-runtime 10
 
       - name: Create release
         run: >
-          gh release create ${{ env.TAG }} publish/WuHealthGuard.exe publish/update.json
+          gh release create ${{ env.TAG }} publish/WuHealthGuardSetup.exe publish/WuHealthGuard.exe publish/update.json
           --target ${{ github.sha }} --title "WU Health Guard ${{ env.VERSION }}" --generate-notes

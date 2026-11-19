@@ -16,6 +16,15 @@
     <NoWarn>$(NoWarn);CA1303;CA2000;CA1031</NoWarn>
   </PropertyGroup>
 
+  <!--
+    Auto-update. Both are empty in developer/CI builds, which turns updates off.
+    The release workflow sets them: the public half of the UPDATE_SIGNING_KEY secret, and the feed URL.
+  -->
+  <ItemGroup>
+    <AssemblyMetadata Include="UpdatePublicKey" Value="$(UpdatePublicKey)" />
+    <AssemblyMetadata Include="UpdateFeedUrl" Value="$(UpdateFeedUrl)" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\WuHealthGuard.Windows\WuHealthGuard.Windows.csproj" />
   </ItemGroup>

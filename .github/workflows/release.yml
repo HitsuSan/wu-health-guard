@@ -1,0 +1,69 @@
+name: Release
+
+# Push a tag like v0.2.0 to publish a release. Installed copies pick it up within ~6 hours
+# (or right away with "Check for updates").
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+      FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/update.json
+      EXE_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/WuHealthGuard.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Check signing key
+        shell: pwsh
+        run: |
+          if (-not $env:UPDATE_SIGNING_KEY) {
+            throw "The UPDATE_SIGNING_KEY secret is missing. See README > Releases and updates."
+          }
+
+      - name: Version from tag
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Test
+        run: dotnet test WuHealthGuard.slnx -c Release
+
+      - name: Public key
+        shell: pwsh
+        run: |
+          dotnet build tools/WuHealthGuard.ReleaseTool -c Release --nologo -v q
+          $key = dotnet run --no-build --project tools/WuHealthGuard.ReleaseTool -c Release -- pubkey
+          if ($LASTEXITCODE -ne 0) { throw "Couldn't read the signing key." }
+          "UPDATE_PUBLIC_KEY=$key" >> $env:GITHUB_ENV
+
+      - name: Publish
+        run: >
+          dotnet publish src/WuHealthGuard.Tray/WuHealthGuard.Tray.csproj -c Release -r win-x64
+          --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=none -p:Version=${{ env.VERSION }}
+          "-p:UpdatePublicKey=${{ env.UPDATE_PUBLIC_KEY }}" "-p:UpdateFeedUrl=${{ env.FEED_URL }}"
+          -o publish
+
+      - name: Sign update manifest
+        run: >
+          dotnet run --no-build --project tools/WuHealthGuard.ReleaseTool -c Release --
+          manifest --file publish/WuHealthGuard.exe --version ${{ env.VERSION }}
+          --url ${{ env.EXE_URL }} --out publish/update.json
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create ${{ github.ref_name }} publish/WuHealthGuard.exe publish/update.json
+          --title "WU Health Guard ${{ env.VERSION }}" --generate-notes

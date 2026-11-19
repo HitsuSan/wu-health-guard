@@ -5,6 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!-- Developer and CI builds are 0.1.0-dev. Releases pass -p:Version=X.Y.Z from the git tag. -->
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>dev</VersionSuffix>
     <Company>WU Health Guard</Company>
     <Product>WU Health Guard</Product>
   </PropertyGroup>

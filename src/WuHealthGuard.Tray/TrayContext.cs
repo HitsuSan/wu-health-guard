@@ -3,6 +3,7 @@ using Microsoft.Win32;
 using WuHealthGuard.Core.Fixes;
 using WuHealthGuard.Core.Guard;
 using WuHealthGuard.Core.Model;
+using WuHealthGuard.Core.Updates;
 using WuHealthGuard.Windows;
 
 namespace WuHealthGuard.Tray;
@@ -10,6 +11,8 @@ namespace WuHealthGuard.Tray;
 internal sealed class TrayContext : ApplicationContext
 {
     private const int MaxTooltip = 127;
+    private static readonly TimeSpan FirstUpdateCheck = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(6);
 
     private readonly WindowsComposition _app = new();
     private readonly NotifyIcon _icon = new() { Icon = TrayIcons.Unknown, Text = "WU Health Guard: checking…", Visible = true };
@@ -18,16 +21,25 @@ internal sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _pauseItem = new();
     private readonly ToolStripMenuItem _autoPauseItem = new("Pause updates automatically while red") { CheckOnClick = true };
     private readonly ToolStripMenuItem _shutdownGuardItem = new("Warn before restart or shutdown while red") { CheckOnClick = true };
+    private readonly ToolStripMenuItem _autoUpdateItem = new("Install updates automatically") { CheckOnClick = true };
     private readonly System.Windows.Forms.Timer _timer = new();
+    private readonly System.Windows.Forms.Timer _updateTimer = new();
+    private readonly HttpClient _http = CreateHttpClient();
+    private readonly UpdateClient _updates;
     private readonly ShutdownGuardWindow _guard = new();
     private readonly FixRunner _fixes;
     private readonly ReportForm _form;
     private AppSettings _settings = AppSettings.Load();
     private HealthReport? _last;
     private bool _scanning;
+    private bool _updating;
 
-    public TrayContext()
+    /// <param name="updatedFrom">The previous version, when this start is the restart after an update.</param>
+    public TrayContext(string? updatedFrom = null)
     {
+        TrySecureDataFolder();
+        _updates = new UpdateClient(_http, AppInfo.Version, AppInfo.UpdateFeedUrl, AppInfo.UpdatePublicKey);
+
         _fixes = _app.CreateFixRunner(
             new WinFormsConfirmationPrompt(() => _form is { Visible: true } ? _form : null),
             () => _settings.Guard.PauseDays,
@@ -43,6 +55,9 @@ internal sealed class TrayContext : ApplicationContext
             ApplyShutdownGuard();
         };
         _pauseItem.Click += (_, _) => TogglePause();
+        _autoUpdateItem.Checked = _settings.AutoUpdate;
+        _autoUpdateItem.Enabled = _updates.Enabled;
+        _autoUpdateItem.CheckedChanged += (_, _) => UpdateSettings(_settings with { AutoUpdate = _autoUpdateItem.Checked });
 
         _menu.Items.AddRange(
         [
@@ -54,7 +69,11 @@ internal sealed class TrayContext : ApplicationContext
             _autoPauseItem,
             _shutdownGuardItem,
             new ToolStripSeparator(),
+            new ToolStripMenuItem("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(userInitiated: true)),
+            _autoUpdateItem,
             new ToolStripMenuItem("Open log folder", null, (_, _) => OpenFolder(AppPaths.Logs)),
+            new ToolStripSeparator(),
+            new ToolStripMenuItem($"Version {AppInfo.Version}") { Enabled = false },
             new ToolStripMenuItem("Exit", null, (_, _) => ExitThread()),
         ]);
         _menu.Opening += (_, _) => RefreshPauseItem();
@@ -74,7 +93,142 @@ internal sealed class TrayContext : ApplicationContext
 
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
+        if (_updates.Enabled)
+        {
+            _updateTimer.Interval = (int)FirstUpdateCheck.TotalMilliseconds;
+            _updateTimer.Tick += async (_, _) =>
+            {
+                _updateTimer.Interval = (int)UpdateCheckInterval.TotalMilliseconds;
+                await CheckForUpdatesAsync(userInitiated: false);
+            };
+            _updateTimer.Start();
+        }
+
+        if (updatedFrom is not null)
+        {
+            _app.Log.Write(ActionLogLevel.Info, $"Updated from {updatedFrom} to {AppInfo.Version}.");
+            _icon.ShowBalloonTip(5000, "WU Health Guard updated", $"Now running version {AppInfo.Version}.", ToolTipIcon.Info);
+            _ = SelfUpdater.CleanUpOldVersionAsync();
+        }
+
         _ = ScanAsync(false);
+    }
+
+    private static HttpClient CreateHttpClient()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd($"WuHealthGuard/{AppInfo.Version}");
+        return http;
+    }
+
+    private static void TrySecureDataFolder()
+    {
+        try
+        {
+            AppPaths.EnsureSecured();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // Logged once the log is available; the app still works.
+            Debug.WriteLine($"Couldn't secure {AppPaths.Root}: {ex.Message}");
+        }
+    }
+
+    private async Task CheckForUpdatesAsync(bool userInitiated)
+    {
+        if (_updating)
+        {
+            return;
+        }
+
+        if (!_updates.Enabled)
+        {
+            if (userInitiated)
+            {
+                MessageBox.Show(
+                    $"This is a developer build ({AppInfo.Version}) and doesn't update itself.\n\n" +
+                    "Install a release from the repository's Releases page; releases keep themselves up to date.",
+                    "WU Health Guard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
+            return;
+        }
+
+        _updating = true;
+        try
+        {
+            var check = await _updates.CheckAsync(CancellationToken.None);
+            switch (check.Decision.Status)
+            {
+                case UpdateStatus.Available when check.Manifest is { } manifest:
+                    if (userInitiated || _settings.AutoUpdate)
+                    {
+                        await InstallUpdateAsync(manifest, userInitiated);
+                    }
+                    else
+                    {
+                        _icon.ShowBalloonTip(10_000, "Update available", $"{check.Decision.Message} Right-click the icon > Check for updates to install it.", ToolTipIcon.Info);
+                    }
+
+                    break;
+
+                case UpdateStatus.Rejected:
+                    _app.Log.Write(ActionLogLevel.Warning, $"Update rejected: {check.Decision.Message}");
+                    if (userInitiated)
+                    {
+                        MessageBox.Show(check.Decision.Message, "WU Health Guard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+
+                    break;
+
+                default:
+                    if (userInitiated)
+                    {
+                        MessageBox.Show(check.Decision.Message, "WU Health Guard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            _app.Log.Write(ActionLogLevel.Warning, $"Update check failed: {ex.Message}");
+            if (userInitiated)
+            {
+                MessageBox.Show($"Couldn't check for updates: {ex.Message}", "WU Health Guard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        finally
+        {
+            _updating = false;
+        }
+    }
+
+    private async Task InstallUpdateAsync(UpdateManifest manifest, bool userInitiated)
+    {
+        // Never swap the app out in the middle of a scan or a fix; the next check will try again.
+        if (!userInitiated && (_scanning || _form.IsBusy))
+        {
+            return;
+        }
+
+        if (userInitiated && MessageBox.Show(
+                $"Install version {manifest.Version} ({UpdateRules.FormatSize(manifest.Size)})? The app restarts briefly.",
+                "WU Health Guard", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        _app.Log.Write(ActionLogLevel.Info, $"Downloading {manifest.Version} from {manifest.Url}.");
+        var file = await _updates.DownloadAsync(manifest, CancellationToken.None);
+        var error = SelfUpdater.Apply(file, manifest.Sha256, manifest.Version, _app.Log);
+        if (error is null)
+        {
+            ExitThread();
+            return;
+        }
+
+        _icon.ShowBalloonTip(10_000, "Update rolled back", error, ToolTipIcon.Warning);
     }
 
     private async Task ScanAsync(bool deepScan)
@@ -226,6 +380,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         _timer.Stop();
+        _updateTimer.Stop();
         _guard.BlockReason = null;
         _icon.Visible = false;
         base.ExitThreadCore();
@@ -236,6 +391,8 @@ internal sealed class TrayContext : ApplicationContext
         if (disposing)
         {
             _timer.Dispose();
+            _updateTimer.Dispose();
+            _http.Dispose();
             _icon.Dispose();
             _menu.Dispose();
             _form.Dispose();

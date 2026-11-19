@@ -83,6 +83,41 @@ WuHealthGuard.exe --install
 
 `--uninstall` removes it. Logs and backups go to `%ProgramData%\WuHealthGuard`.
 
+### Releases and updates
+
+Installed copies update themselves. Every 6 hours (and from **Check for updates** in the tray menu) the app
+downloads `update.json` from the latest GitHub release. It installs the new version only if:
+
+- the manifest's signature verifies against the public key built into the app,
+- the version is newer than the running one, and
+- the downloaded exe matches the signed SHA-256.
+
+Then it swaps the exe in place and restarts itself. If the new version doesn't start within a minute, it puts
+the old one back. Updates never install in the middle of a scan or a fix. Turn them off with **Install updates
+automatically** in the menu.
+
+Developer and CI builds (`0.1.0-dev`) have no key built in and never update themselves.
+
+**One-time setup** (creates the key that signs releases):
+
+1. Run `WuHealthGuard.exe --generate-update-key`. It saves a key file to your desktop.
+2. In GitHub: Settings > Secrets and variables > Actions > New repository secret, named `UPDATE_SIGNING_KEY`,
+   with the private key from the file. Then delete the file.
+
+**Publishing a release:** push a version tag. The Release workflow tests, builds, signs and publishes
+`WuHealthGuard.exe` and `update.json`.
+
+```bash
+git tag v0.2.0
+```
+
+```bash
+git push origin v0.2.0
+```
+
+Install the first release by hand (download `WuHealthGuard.exe` from the release); it keeps itself up to date
+after that.
+
 ### Layout
 
 | Project | What it holds |
@@ -91,5 +126,6 @@ WuHealthGuard.exe --install
 | `src/WuHealthGuard.Windows` | Registry, DISM API, Windows Update Agent, services, backups, update pause. |
 | `src/WuHealthGuard.Tray` | The WinForms tray app. |
 | `tests/WuHealthGuard.Core.Tests` | Unit tests for the core, with in-memory fakes. |
+| `tools/WuHealthGuard.ReleaseTool` | Signs release manifests in CI. |
 
 The plan and phase status are in [docs/PLAN.md](docs/PLAN.md).

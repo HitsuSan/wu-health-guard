@@ -83,6 +83,16 @@ Shut down doesn't change it, which is correct: only a real restart processes pen
 
 **Data**: `%ProgramData%\WuHealthGuard\` holds `settings.json`, `logs\actions-yyyy-MM.jsonl` and `backups\`.
 
+### Auto-update
+
+| Piece | Implementation | Tests |
+|-------|----------------|-------|
+| Signed manifest | `update.json` = version, HTTPS URL, SHA-256, ECDSA P-256 signature over all three (`UpdateSignature`). The private key exists only as the `UPDATE_SIGNING_KEY` Actions secret; release builds embed the public key. | `UpdateTests` |
+| Check | Every 6 h + menu. Rejects bad signatures, non-HTTPS URLs, malformed hashes, same or older versions (no downgrade replay). | `UpdateTests` |
+| Download | Into `%ProgramData%\WuHealthGuard\updates`, which the app locks to Administrators/SYSTEM (owner: Administrators), so a standard user can't swap the file before the elevated app runs it. Size cap, hash checked before and right before install. | VM test |
+| Install | Rename running exe to `.old`, copy new exe in, hand over the single-instance slot, start it, wait up to 60 s for it to signal that its tray icon is up; otherwise roll back. | VM test |
+| Release | `.github/workflows/release.yml` on `v*.*.*` tags: test, derive public key, publish single-file exe, sign manifest, create GitHub Release. | First tag |
+
 ## 4. Phases
 
 1. **Core** — checks, verdict, guard policy, fix runner, fixes, unit + incident scenario tests. ✅ done

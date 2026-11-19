@@ -193,8 +193,9 @@ begin
       if DownloadPage.AbortedByUser then
         Log('Runtime download cancelled by the user.')
       else
-        SuppressibleMsgBox('Couldn''t download the .NET {#RuntimeMajor} Desktop Runtime from Microsoft: ' + GetExceptionMessage +
-          #13#10#13#10 + 'Check the internet connection and try again.', mbCriticalError, MB_OK, IDOK);
+        { Keep #13#10 off the start of a line: there the preprocessor reads it as a directive. }
+        SuppressibleMsgBox('Couldn''t download the .NET {#RuntimeMajor} Desktop Runtime from Microsoft: ' + GetExceptionMessage + #13#10#13#10 +
+          'Check the internet connection and try again.', mbCriticalError, MB_OK, IDOK);
       Result := False;
       Exit;
     end;

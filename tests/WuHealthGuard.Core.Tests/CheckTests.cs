@@ -76,7 +76,7 @@ public class CbsPendingPackagesCheckTests
         Assert.Equal($"1 package stuck in {label} for 9 days", f.Title);
         Assert.Equal("9 days", f.Data[FindingDataKeys.Age]);
         Assert.Equal(Pkg, f.Data[FindingDataKeys.PackageName]);
-        Assert.Equal([FixIds.PauseUpdates, FixIds.DismRestoreHealth, FixIds.RemoveStuckPackage], f.SuggestedFixIds);
+        Assert.Equal([FixIds.PauseUpdates, FixIds.DismRestoreHealth, FixIds.RemoveStuckPackage, FixIds.InPlaceRepair], f.SuggestedFixIds);
     }
 
     [Fact]
@@ -236,7 +236,7 @@ public class PendingXmlCheckTests
         Assert.Equal(PendingXmlCheck.StaleCode, f.Code);
         Assert.Equal(Severity.Critical, f.Severity);
         Assert.Equal(RestartImpact.Block, f.Impact);
-        Assert.Equal([FixIds.PauseUpdates], f.SuggestedFixIds);
+        Assert.Equal([FixIds.PauseUpdates, FixIds.InPlaceRepair], f.SuggestedFixIds);
         Assert.Contains("Don't delete or rename", f.Detail, StringComparison.Ordinal);
     }
 

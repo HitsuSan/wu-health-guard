@@ -12,6 +12,7 @@ public static class FixIds
     public const string ResetUpdateCache = "reset-update-cache";
     public const string ClearStaleRebootFlags = "clear-stale-reboot-flags";
     public const string RemoveStuckPackage = "remove-stuck-package";
+    public const string InPlaceRepair = "in-place-repair";
 }
 
 public enum FixRisk

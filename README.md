@@ -56,10 +56,37 @@ been going on, shows the evidence (package names, registry keys, error codes), a
 | Repair the component store (`DISM /RestoreHealth`) | Risky: asks first, makes a backup |
 | Clear a stale restart flag (only when no packages are stuck) | Risky: asks first, makes a backup |
 | Remove a stuck, non-permanent update package | Risky: asks first, makes a backup |
+| In-place repair install (guided; see below) | Risky: asks first, makes a backup |
 
 Risky means anything that touches CBS, WinSxS or pending servicing state. Before a risky fix runs, the app
 creates a System Restore point and exports the registry keys it will change. If any backup fails, nothing is
 changed. Every action is logged to `C:\ProgramData\WuHealthGuard\logs`.
+
+### In-place repair install
+
+When DISM can't repair the component store, or servicing is stuck (packages pending since before a restart,
+pending.xml missing), the fix is an in-place repair install: Windows Setup reinstalls Windows over itself and
+keeps files, apps and settings. **In-place repair install…** on those findings opens a helper that works for
+any PC:
+
+1. **This PC.** Version, build, edition, system language, architecture, and whether it's an Insider build,
+   read from the registry.
+2. **Option 1: "Fix problems using Windows Update"** (Settings > System > Recovery), when the PC has it
+   (Windows 11 22H2 or later with the February 2024 update or newer). The app opens the page; Windows has no
+   way for an app to start it.
+3. **Option 2: an ISO.** The app says exactly which ISO this PC needs (for example "Windows 11 26H2 · Pro ·
+   English (United States) · x64") and where Microsoft offers it, or warns when there's no public one
+   (Insider, Enterprise, LTSC, Windows 10). It doesn't download anything itself.
+4. **Check the ISO.** Pick the ISO (or setup.exe on a USB stick). The app mounts it read-only, reads its images
+   with DISM and compares edition, language, version and architecture with this PC.
+5. **Windows Setup checks it too.** `setup.exe /Auto Upgrade /Compat ScanOnly` runs Setup's own checks and
+   exits without installing. Only a clean result (0xC1900210) unlocks the last step.
+6. **Start repair install.** After confirmation and a restore point, Setup runs with `/Auto Upgrade` (keep files
+   and apps; if it can't, it stops instead of doing anything else). The restart warning stands down while Setup
+   runs, since Setup restarts the PC itself.
+
+Steps 1–5 change nothing. The research behind the rules, with sources, is in
+[docs/IN-PLACE-REPAIR.md](docs/IN-PLACE-REPAIR.md).
 
 ### What it won't do
 
@@ -67,7 +94,8 @@ changed. Every action is logged to `C:\ProgramData\WuHealthGuard\logs`.
   halfway, and the next restart can loop again.
 - **Edit or delete CBS package records.** No backup makes that safe.
 - **Guess at repairs it can't make.** When DISM can't find a good repair source, the app says that an
-  in-place repair install is the fix: run `setup.exe` from a Windows ISO of the same version and keep files and apps.
+  in-place repair install is the fix and helps with it (above). It doesn't download ISOs or build them from
+  third-party sources, and it doesn't run Setup on media Setup itself hasn't approved.
 
 ## Install
 
@@ -102,8 +130,9 @@ automatically** in the tray menu.
 - Administrator rights (reading servicing state and running DISM need them).
 - English only for now.
 - One copy runs per PC, started for the user who installed it.
-- It can't repair a component store that has no good repair source; it tells you an in-place repair install
-  is needed instead.
+- It can't repair a component store that has no good repair source by itself; the in-place repair needs
+  installation media matching the PC (or "Fix problems using Windows Update"), and for some PCs no public
+  media exists.
 
 ## Development
 

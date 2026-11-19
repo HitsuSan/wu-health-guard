@@ -52,3 +52,73 @@ The app can't repair a component store that has no good repair source. When it r
 ## Status
 
 The full spec comes after CHROMAZERO is repaired.
+
+## Development
+
+### Build
+
+Requires the .NET 10 SDK. The core library and tests build and run on any OS; the Windows projects
+build on Linux/macOS too (`EnableWindowsTargeting`), but the app only runs on Windows 10/11.
+
+```bash
+dotnet build WuHealthGuard.slnx
+```
+
+```bash
+dotnet test WuHealthGuard.slnx
+```
+
+```bash
+dotnet publish src/WuHealthGuard.Tray -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
+```
+
+### Run
+
+The app needs administrator rights (DISM API, servicing registry keys, fixes). To start it at logon
+without a UAC prompt each time, register the scheduled task once from an elevated prompt:
+
+```bash
+WuHealthGuard.exe --install
+```
+
+`--uninstall` removes it. Logs and backups go to `%ProgramData%\WuHealthGuard`.
+
+### Releases and updates
+
+Installed copies update themselves. Every 6 hours (and from **Check for updates** in the tray menu) the app
+downloads `update.json` from the latest GitHub release. It installs the new version only if:
+
+- the manifest's signature verifies against the public key built into the app,
+- the version is newer than the running one, and
+- the downloaded exe matches the signed SHA-256.
+
+Then it swaps the exe in place and restarts itself. If the new version doesn't start within a minute, it puts
+the old one back. Updates never install in the middle of a scan or a fix. Turn them off with **Install updates
+automatically** in the menu.
+
+Developer and CI builds (`0.1.0-dev`) have no key built in and never update themselves.
+
+**One-time setup** (creates the key that signs releases):
+
+1. Run `WuHealthGuard.exe --generate-update-key`. It saves a key file to your desktop.
+2. In GitHub: Settings > Secrets and variables > Actions > New repository secret, named `UPDATE_SIGNING_KEY`,
+   with the private key from the file. Then delete the file.
+
+**Publishing a release:** in GitHub, open Actions > Release > Run workflow, keep the branch on `main`, enter
+the new version (e.g. `0.2.1`, higher than the last one) and run it. The workflow tests, builds, signs,
+tags and publishes `WuHealthGuard.exe` and `update.json`. Pushing a `vX.Y.Z` tag does the same.
+
+Install the first release by hand (download `WuHealthGuard.exe` from the release); it keeps itself up to date
+after that.
+
+### Layout
+
+| Project | What it holds |
+|---------|---------------|
+| `src/WuHealthGuard.Core` | Checks, verdict, auto-pause policy, fix runner and fixes. No Windows APIs. |
+| `src/WuHealthGuard.Windows` | Registry, DISM API, Windows Update Agent, services, backups, update pause. |
+| `src/WuHealthGuard.Tray` | The WinForms tray app. |
+| `tests/WuHealthGuard.Core.Tests` | Unit tests for the core, with in-memory fakes. |
+| `tools/WuHealthGuard.ReleaseTool` | Signs release manifests in CI. |
+
+The plan and phase status are in [docs/PLAN.md](docs/PLAN.md).

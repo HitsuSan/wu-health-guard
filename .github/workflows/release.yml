@@ -1,0 +1,90 @@
+name: Release
+
+# Two ways to publish (installed copies pick it up within ~6 hours, or right away with "Check for updates"):
+#   - Actions > Release > Run workflow on main, and enter a version like 0.2.0, or
+#   - push a tag like v0.2.0.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.2.0 (must be higher than the last release)'
+        required: true
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Manual releases only from main, so every release is reviewed code.
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    env:
+      UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Check signing key
+        shell: pwsh
+        run: |
+          if (-not $env:UPDATE_SIGNING_KEY) {
+            throw "The UPDATE_SIGNING_KEY secret is missing. See README > Releases and updates."
+          }
+
+      - name: Version and tag
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $version = if ($env:GITHUB_EVENT_NAME -eq 'push') { $env:GITHUB_REF_NAME.TrimStart('v') } else { $env:INPUT_VERSION.Trim().TrimStart('v') }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Version '$version' must look like 1.2.3." }
+          $tag = "v$version"
+          if ($env:GITHUB_EVENT_NAME -ne 'push') {
+            gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+            if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists. Pick a higher version." }
+          }
+          $global:LASTEXITCODE = 0
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "TAG=$tag" >> $env:GITHUB_ENV
+          "FEED_URL=https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download/update.json" >> $env:GITHUB_ENV
+          "EXE_URL=https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag/WuHealthGuard.exe" >> $env:GITHUB_ENV
+
+      - name: Test
+        run: dotnet test WuHealthGuard.slnx -c Release
+
+      - name: Public key
+        shell: pwsh
+        run: |
+          dotnet build tools/WuHealthGuard.ReleaseTool -c Release --nologo -v q
+          $key = dotnet run --no-build --project tools/WuHealthGuard.ReleaseTool -c Release -- pubkey
+          if ($LASTEXITCODE -ne 0) { throw "Couldn't read the signing key." }
+          "UPDATE_PUBLIC_KEY=$key" >> $env:GITHUB_ENV
+
+      - name: Publish
+        run: >
+          dotnet publish src/WuHealthGuard.Tray/WuHealthGuard.Tray.csproj -c Release -r win-x64
+          --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=none -p:Version=${{ env.VERSION }}
+          "-p:UpdatePublicKey=${{ env.UPDATE_PUBLIC_KEY }}" "-p:UpdateFeedUrl=${{ env.FEED_URL }}"
+          -o publish
+
+      - name: Sign update manifest
+        run: >
+          dotnet run --no-build --project tools/WuHealthGuard.ReleaseTool -c Release --
+          manifest --file publish/WuHealthGuard.exe --version ${{ env.VERSION }}
+          --url ${{ env.EXE_URL }} --out publish/update.json
+
+      - name: Create release
+        run: >
+          gh release create ${{ env.TAG }} publish/WuHealthGuard.exe publish/update.json
+          --target ${{ github.sha }} --title "WU Health Guard ${{ env.VERSION }}" --generate-notes

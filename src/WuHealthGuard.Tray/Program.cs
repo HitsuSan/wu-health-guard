@@ -1,0 +1,85 @@
+using WuHealthGuard.Core.Updates;
+
+namespace WuHealthGuard.Tray;
+
+internal static class Program
+{
+    [STAThread]
+    private static int Main(string[] args)
+    {
+        var command = args.FirstOrDefault()?.ToUpperInvariant();
+        string? updatedFrom = null;
+
+        switch (command)
+        {
+            case null:
+                break;
+            case "--INSTALL":
+                return StartupTask.Install();
+            case "--UNINSTALL":
+                return StartupTask.Uninstall();
+            case "--GENERATE-UPDATE-KEY":
+                return GenerateUpdateKey();
+            case var c when string.Equals(c, SelfUpdater.AfterUpdateSwitch, StringComparison.OrdinalIgnoreCase):
+                updatedFrom = args.ElementAtOrDefault(1) ?? "?";
+                break;
+            default:
+                return Usage();
+        }
+
+        // After an update the old copy has already released the slot; otherwise someone else holds it and we quit.
+        if (!SingleInstance.TryAcquire(updatedFrom is null ? TimeSpan.Zero : TimeSpan.FromSeconds(30)))
+        {
+            return 0;
+        }
+
+        try
+        {
+            ApplicationConfiguration.Initialize();
+            using var context = new TrayContext(updatedFrom);
+            if (updatedFrom is not null)
+            {
+                SelfUpdater.SignalStarted();
+            }
+
+            Application.Run(context);
+        }
+        finally
+        {
+            SingleInstance.Release();
+        }
+
+        return 0;
+    }
+
+    /// <summary>One-time setup for releases: makes the key pair that signs updates. See README "Releases and updates".</summary>
+    private static int GenerateUpdateKey()
+    {
+        var (privateKey, publicKey) = UpdateSignature.GenerateKeyPair();
+        var file = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "wu-health-guard-update-key.txt");
+        File.WriteAllText(file, $"""
+            WU Health Guard update signing key
+            ==================================
+
+            1. In GitHub, open the repository > Settings > Secrets and variables > Actions > New repository secret.
+            2. Name: UPDATE_SIGNING_KEY
+            3. Secret: the private key below (one line).
+            4. Delete this file. Anyone with the private key can publish updates your PCs will install.
+
+            Private key:
+            {privateKey}
+
+            Public key (not secret; release builds derive it from the private key automatically):
+            {publicKey}
+            """);
+        MessageBox.Show($"Saved the new update signing key to:\n{file}\n\nFollow the steps in the file, then delete it.",
+            "WU Health Guard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        return 0;
+    }
+
+    private static int Usage()
+    {
+        MessageBox.Show("Usage: WuHealthGuard.exe [--install | --uninstall | --generate-update-key]", "WU Health Guard");
+        return 2;
+    }
+}

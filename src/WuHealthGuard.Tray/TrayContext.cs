@@ -28,7 +28,8 @@ internal sealed class TrayContext : ApplicationContext
     private readonly UpdateClient _updates;
     private readonly ShutdownGuardWindow _guard = new();
     private readonly FixRunner _fixes;
-    private readonly ReportForm _form;
+    /// <summary>Created the first time it's opened, so a problem in the window can't stop the tray icon.</summary>
+    private ReportForm? _form;
     private AppSettings _settings = AppSettings.Load();
     private HealthReport? _last;
     private bool _scanning;
@@ -42,10 +43,9 @@ internal sealed class TrayContext : ApplicationContext
         _updates = new UpdateClient(_http, AppInfo.Version, AppInfo.UpdateFeedUrl, AppInfo.UpdatePublicKey);
 
         _fixes = _app.CreateFixRunner(
-            new WinFormsConfirmationPrompt(() => _form is { Visible: true } ? _form : null),
+            new WinFormsConfirmationPrompt(() => _form is { Visible: true } form ? form : null),
             () => _settings.Guard.PauseDays,
             _settings.RequireRestorePoint);
-        _form = new ReportForm(_fixes, ScanAsync);
 
         _autoPauseItem.Checked = _settings.Guard.AutoPauseEnabled;
         _autoPauseItem.CheckedChanged += (_, _) => UpdateSettings(_settings with { Guard = _settings.Guard with { AutoPauseEnabled = _autoPauseItem.Checked } });
@@ -208,7 +208,7 @@ internal sealed class TrayContext : ApplicationContext
     private async Task InstallUpdateAsync(UpdateManifest manifest, bool userInitiated)
     {
         // Never swap the app out in the middle of a scan or a fix; the next check will try again.
-        if (!userInitiated && (_scanning || _form.IsBusy))
+        if (!userInitiated && (_scanning || _form?.IsBusy == true))
         {
             return;
         }
@@ -298,7 +298,7 @@ internal sealed class TrayContext : ApplicationContext
                 verdict >= RestartVerdict.DoNotRestart ? ToolTipIcon.Error : ToolTipIcon.Warning);
         }
 
-        _form.ShowReport(report);
+        _form?.ShowReport(report);
     }
 
     private void WarnMissingRuntime(UpdateManifest manifest, string runtime, bool userInitiated)
@@ -378,14 +378,28 @@ internal sealed class TrayContext : ApplicationContext
 
     private void ShowReport()
     {
-        if (_last is not null)
+        try
         {
-            _form.ShowReport(_last);
-        }
+            var form = _form ??= new ReportForm(_fixes, ScanAsync);
+            if (_last is not null)
+            {
+                form.ShowReport(_last);
+            }
 
-        _form.Show();
-        _form.WindowState = FormWindowState.Normal;
-        _form.Activate();
+            form.Show();
+            form.WindowState = FormWindowState.Normal;
+            form.Activate();
+        }
+        catch (Exception ex)
+        {
+            // A broken window must not take the tray (and the restart warning) down with it.
+            _form?.Dispose();
+            _form = null;
+            var log = CrashReport.Write(ex, "Opening the report window");
+            _app.Log.Write(ActionLogLevel.Error, $"Opening the report window failed: {ex.Message}");
+            MessageBox.Show($"The report window couldn't open: {ex.Message}\n\nDetails: {log}", "WU Health Guard",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void SetTooltip(string text) =>
@@ -424,7 +438,7 @@ internal sealed class TrayContext : ApplicationContext
             _http.Dispose();
             _icon.Dispose();
             _menu.Dispose();
-            _form.Dispose();
+            _form?.Dispose();
             _guard.Dispose();
             _app.Dispose();
         }

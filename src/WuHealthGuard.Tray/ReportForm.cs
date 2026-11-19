@@ -98,8 +98,8 @@ internal sealed class ReportForm : Form
 
         _split.Panel1.Controls.Add(_list);
         _split.Panel2.Controls.Add(detailLayout);
-        _split.Panel1MinSize = LogicalToDeviceUnits(260);
-        _split.Panel2MinSize = LogicalToDeviceUnits(320);
+        // Minimum pane widths are applied in PlaceSplitter, once the window has its real size. Setting them
+        // here, while the SplitContainer is still at its 150 px default, throws and kills the app at startup.
         _split.SplitterWidth = LogicalToDeviceUnits(6);
 
         // Bottom bar.
@@ -163,9 +163,27 @@ internal sealed class ReportForm : Form
             return;
         }
 
-        var distance = (int)(_split.Width * ListShare);
-        _split.SplitterDistance = Math.Clamp(distance, _split.Panel1MinSize, Math.Max(_split.Panel1MinSize, _split.Width - _split.Panel2MinSize));
-        _splitPlaced = true;
+        try
+        {
+            var listMin = LogicalToDeviceUnits(260);
+            var detailMin = LogicalToDeviceUnits(320);
+            var width = _split.Width;
+
+            // Distance first, then minimums, and minimums only when they fit; SplitContainer throws otherwise.
+            _split.SplitterDistance = Math.Max(1, (int)(width * ListShare));
+            if (width >= listMin + detailMin + _split.SplitterWidth)
+            {
+                _split.Panel1MinSize = listMin;
+                _split.Panel2MinSize = detailMin;
+            }
+
+            _splitPlaced = true;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
+        {
+            // Layout is cosmetic: keep the default split rather than fail.
+            System.Diagnostics.Debug.WriteLine($"Splitter placement failed: {ex.Message}");
+        }
     }
 
     /// <summary>The finding column takes all the width the severity column leaves.</summary>

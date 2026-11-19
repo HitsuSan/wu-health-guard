@@ -54,7 +54,9 @@ Name: "{autoprograms}\WU Health Guard"; Filename: "{app}\WuHealthGuard.exe"
 
 [Run]
 Filename: "{app}\WuHealthGuard.exe"; Parameters: "--install --quiet"; StatusMsg: "Setting up start at logon..."; Flags: runhidden waituntilterminated
-Filename: "{app}\WuHealthGuard.exe"; Description: "Start WU Health Guard now"; Flags: postinstall nowait skipifsilent
+; postinstall entries run as the original, non-elevated user unless told otherwise, and the app requires
+; administrator rights (Windows refuses with "requires elevation"). runascurrentuser starts it elevated, like Setup.
+Filename: "{app}\WuHealthGuard.exe"; WorkingDir: "{app}"; Description: "Start WU Health Guard now"; Flags: postinstall nowait skipifsilent runascurrentuser
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM WuHealthGuard.exe /F"; Flags: runhidden waituntilterminated; RunOnceId: "StopApp"

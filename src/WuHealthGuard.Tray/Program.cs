@@ -37,6 +37,18 @@ internal static class Program
         try
         {
             ApplicationConfiguration.Initialize();
+
+            // Never fail silently: a tray app that dies before its icon appears leaves no trace otherwise.
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (_, e) =>
+            {
+                var file = CrashReport.Write(e.Exception, "Handling a UI event");
+                MessageBox.Show($"Something went wrong: {e.Exception.Message}\n\nDetails were saved to:\n{file}",
+                    "WU Health Guard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            };
+            AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+                CrashReport.ShowFatal(e.ExceptionObject as Exception, "Background work");
+
             using var context = new TrayContext(updatedFrom);
             if (updatedFrom is not null)
             {
@@ -44,6 +56,11 @@ internal static class Program
             }
 
             Application.Run(context);
+        }
+        catch (Exception ex)
+        {
+            CrashReport.ShowFatal(ex, "Starting up");
+            return 1;
         }
         finally
         {

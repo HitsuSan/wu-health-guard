@@ -104,16 +104,9 @@ Developer and CI builds (`0.1.0-dev`) have no key built in and never update them
 2. In GitHub: Settings > Secrets and variables > Actions > New repository secret, named `UPDATE_SIGNING_KEY`,
    with the private key from the file. Then delete the file.
 
-**Publishing a release:** push a version tag. The Release workflow tests, builds, signs and publishes
-`WuHealthGuard.exe` and `update.json`.
-
-```bash
-git tag v0.2.0
-```
-
-```bash
-git push origin v0.2.0
-```
+**Publishing a release:** in GitHub, open Actions > Release > Run workflow, keep the branch on `main`, enter
+the new version (e.g. `0.2.1`, higher than the last one) and run it. The workflow tests, builds, signs,
+tags and publishes `WuHealthGuard.exe` and `update.json`. Pushing a `vX.Y.Z` tag does the same.
 
 Install the first release by hand (download `WuHealthGuard.exe` from the release); it keeps itself up to date
 after that.

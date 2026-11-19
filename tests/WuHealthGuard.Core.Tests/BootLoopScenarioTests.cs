@@ -7,22 +7,24 @@ using WuHealthGuard.Core.Model;
 namespace WuHealthGuard.Core.Tests;
 
 /// <summary>
-/// Replays the CHROMAZERO incident from the README (November 2026) through the full scanner and checks
-/// that the app would have shown the right light and offered the right fixes at each step.
-/// Package versions are from the README; exact package names and times are illustrative.
+/// Replays a real-world boot-loop sequence through the full scanner and checks that the app shows the right
+/// light and offers the right fixes at each step: a cumulative update half-installs, the PC is only shut down
+/// for days, it boot-loops, pending.xml gets renamed to get it booting, DISM can't repair, a cache reset lets a
+/// new update stage cleanly on top of the stuck packages, and System Restore leaves flags behind.
+/// Package names, versions and dates are illustrative.
 /// </summary>
-public class ChromazeroScenarioTests
+public class BootLoopScenarioTests
 {
-    private const string Rollup9818 = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9818.1.8";
-    private const string Rollup9818Sub = "Package_1_for_RollupFix~31bf3856ad364e35~amd64~~26100.9818.1.8";
-    private const string Rollup9711 = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9711.1.10";
-    private const string Kb5132061 = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9905.1.3";
+    private const string NewRollup = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.4000.1.8";
+    private const string NewRollupSub = "Package_1_for_RollupFix~31bf3856ad364e35~amd64~~26100.4000.1.8";
+    private const string OldRollup = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.3900.1.10";
+    private const string NextRollup = "Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.4100.1.3";
     private const string WinSxS = @"C:\Windows\WinSxS";
 
-    private static readonly DateTimeOffset Nov2 = Day(2);
-    private static readonly DateTimeOffset Nov9 = Day(9).AddHours(3);
+    private static readonly DateTimeOffset LastRealBoot = Day(2);
+    private static readonly DateTimeOffset HalfInstalled = Day(9).AddHours(3);
 
-    private static DateTimeOffset Day(int day, int hour = 12) => new(2026, 11, day, hour, 0, 0, TimeSpan.Zero);
+    private static DateTimeOffset Day(int day, int hour = 12) => new(2030, 3, day, hour, 0, 0, TimeSpan.Zero);
 
     private sealed class Pc
     {
@@ -96,17 +98,17 @@ public class ChromazeroScenarioTests
     }
 
     private static Pc HalfInstalledRollup() => new Pc()
-        .Package(Rollup9818, CbsPackageState.InstallPending, Nov9)
-        .Package(Rollup9818Sub, CbsPackageState.InstallPending, Nov9)
-        .Package(Rollup9711, CbsPackageState.UninstallPending, Nov9);
+        .Package(NewRollup, CbsPackageState.InstallPending, HalfInstalled)
+        .Package(NewRollupSub, CbsPackageState.InstallPending, HalfInstalled)
+        .Package(OldRollup, CbsPackageState.UninstallPending, HalfInstalled);
 
     [Fact]
-    public async Task Nov15_rollup_half_installed_and_only_shut_down_since_is_yellow_and_points_at_fast_startup()
+    public async Task Days_after_a_half_installed_rollup_with_only_shutdowns_is_yellow_and_points_at_fast_startup()
     {
-        // Nov 9: 9818 half installs. The PC is only shut down (Fast Startup), so the last real boot is still Nov 2.
+        // Day 9: the new rollup half installs. The PC is only shut down (Fast Startup), so the last real boot is still day 2.
         var pc = HalfInstalledRollup().FastStartupOn();
-        pc.System.LastBootTime = Nov2;
-        pc.Files.Add(WinSxS + @"\pending.xml", Nov9);
+        pc.System.LastBootTime = LastRealBoot;
+        pc.Files.Add(WinSxS + @"\pending.xml", HalfInstalled);
         pc.Now = Day(15);
 
         var report = await pc.ScanAsync();
@@ -119,12 +121,12 @@ public class ChromazeroScenarioTests
     }
 
     [Fact]
-    public async Task Nov16_after_renaming_pending_xml_to_escape_the_boot_loop_is_red()
+    public async Task After_renaming_pending_xml_to_escape_the_boot_loop_is_red()
     {
-        // Nov 16: boot loop; pending.xml renamed (to pending.old) so Windows boots. Packages still pending since Nov 9.
+        // Day 16: boot loop; pending.xml renamed (to pending.old) so Windows boots. Packages still pending since day 9.
         var pc = HalfInstalledRollup().FastStartupOn();
         pc.System.LastBootTime = Day(16, 9);
-        pc.Files.Add(WinSxS + @"\pending.old", Nov9);
+        pc.Files.Add(WinSxS + @"\pending.old", HalfInstalled);
         pc.Now = Day(16, 10);
 
         var report = await pc.ScanAsync();
@@ -141,7 +143,7 @@ public class ChromazeroScenarioTests
     }
 
     [Fact]
-    public async Task Nov17_dism_fails_without_a_repair_source_and_the_app_says_in_place_repair()
+    public async Task Dism_fails_without_a_repair_source_and_the_app_says_in_place_repair()
     {
         var processes = new FakeProcesses { Handler = (_, _) => new ProcessResult(unchecked((int)0x800F0915), "[==85.0%==]\nError: 0x800f0915") };
         var runner = new FixRunner([new DismRestoreHealthFix(processes)], new FakePrompt(true), new FakeBackup(), new MemoryLog(), new FakeTime(Day(17)), "/backups");
@@ -153,7 +155,7 @@ public class ChromazeroScenarioTests
     }
 
     [Fact]
-    public async Task Nov17_dism_3017_after_only_shutting_down_says_use_restart()
+    public async Task Dism_3017_after_only_shutting_down_says_use_restart()
     {
         var processes = new FakeProcesses { Handler = (_, _) => new ProcessResult(unchecked((int)0x80070BC9), "Error: 3017") };
         var runner = new FixRunner([new DismRestoreHealthFix(processes)], new FakePrompt(true), new FakeBackup(), new MemoryLog(), new FakeTime(Day(17)), "/backups");
@@ -164,14 +166,14 @@ public class ChromazeroScenarioTests
     }
 
     [Fact]
-    public async Task Nov18_new_update_staged_cleanly_on_top_of_stuck_packages_is_still_red()
+    public async Task New_update_staged_cleanly_on_top_of_stuck_packages_is_still_red()
     {
-        // Nov 17: a real restart. Nov 18: cache reset, KB5132061 downloads and stages with no error.
-        // This is the restart that boot-looped the second time.
+        // Day 17: a real restart. Day 18: cache reset; the next rollup downloads and stages with no error.
+        // Restarting now is what loops again.
         var pc = HalfInstalledRollup();
         pc.System.LastBootTime = Day(17, 8);
         pc.Store = ComponentStoreState.Repairable;
-        pc.Package(Kb5132061, CbsPackageState.InstallPending, Day(18, 10));
+        pc.Package(NextRollup, CbsPackageState.InstallPending, Day(18, 10));
         pc.Files.Add(WinSxS + @"\pending.xml", Day(18, 10));
         pc.Registry.AddKey(RegistryPaths.WuRebootRequired, Day(18, 10));
         pc.Now = Day(18, 12);
@@ -181,8 +183,8 @@ public class ChromazeroScenarioTests
         Assert.Equal(RestartVerdict.DoNotRestart, report.Verdict);
         var stuck = report.Findings.Where(f => f.Code == CbsPendingPackagesCheck.StuckCode).ToList();
         Assert.Equal(2, stuck.Count);
-        Assert.All(stuck, f => Assert.DoesNotContain(Kb5132061, f.Detail, StringComparison.Ordinal)); // The new one is fine...
-        Assert.Contains(report.Findings, f => f.Code == CbsPendingPackagesCheck.PendingCode && f.Detail.Contains(Kb5132061, StringComparison.Ordinal));
+        Assert.All(stuck, f => Assert.DoesNotContain(NextRollup, f.Detail, StringComparison.Ordinal)); // The new one is fine...
+        Assert.Contains(report.Findings, f => f.Code == CbsPendingPackagesCheck.PendingCode && f.Detail.Contains(NextRollup, StringComparison.Ordinal));
 
         // ...but the restart must be held, and auto-pause (when enabled) kicks in.
         var decision = GuardPolicy.Decide(report, null, new GuardSettings { AutoPauseEnabled = true }, PauseStatus.NotPaused, pc.Now);
@@ -191,7 +193,7 @@ public class ChromazeroScenarioTests
     }
 
     [Fact]
-    public async Task Nov18_cache_reset_is_refused_while_packages_are_stuck()
+    public async Task Cache_reset_is_refused_while_packages_are_stuck()
     {
         var pc = HalfInstalledRollup();
         pc.System.LastBootTime = Day(17, 8);
@@ -208,15 +210,15 @@ public class ChromazeroScenarioTests
     [Fact]
     public async Task After_system_restore_with_leftover_flags_and_paused_updates_stays_red_and_hides_misleading_fixes()
     {
-        // System Restore brought back 9711, but the reboot flags and odd package states survived.
+        // System Restore brought back the old rollup, but the reboot flags and odd package states survived.
         var pc = new Pc()
-            .Package(Rollup9818, CbsPackageState.InstallPending, Nov9)
-            .Package(Rollup9711, CbsPackageState.UninstallPending, Nov9);
+            .Package(NewRollup, CbsPackageState.InstallPending, HalfInstalled)
+            .Package(OldRollup, CbsPackageState.UninstallPending, HalfInstalled);
         pc.System.LastBootTime = Day(19, 7);
-        pc.Registry.AddKey(RegistryPaths.CbsRebootPending, Nov9);
+        pc.Registry.AddKey(RegistryPaths.CbsRebootPending, HalfInstalled);
         pc.Registry.AddKey(RegistryPaths.WuRebootRequired, Day(18, 10));
-        pc.Files.Add(WinSxS + @"\pending.old", Nov9);
-        pc.Pause.Status = new PauseStatus(true, Day(16).AddMonths(1)); // Paused until Dec 16.
+        pc.Files.Add(WinSxS + @"\pending.old", HalfInstalled);
+        pc.Pause.Status = new PauseStatus(true, Day(16).AddMonths(1)); // Paused for a month.
         pc.Now = Day(19, 12);
 
         var report = await pc.ScanAsync();
@@ -238,7 +240,7 @@ public class ChromazeroScenarioTests
     [Fact]
     public async Task Healthy_pc_with_a_normally_staged_update_is_green()
     {
-        var pc = new Pc().Package(Kb5132061, CbsPackageState.InstallPending, Day(18, 10));
+        var pc = new Pc().Package(NextRollup, CbsPackageState.InstallPending, Day(18, 10));
         pc.System.LastBootTime = Day(17, 8);
         pc.Files.Add(WinSxS + @"\pending.xml", Day(18, 10));
         pc.Now = Day(18, 12);

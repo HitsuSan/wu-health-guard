@@ -350,7 +350,7 @@ public class FixRunnerTests
     public async Task Remove_package_is_not_offered_for_permanent_rollups()
     {
         var h = new Harness();
-        var result = await h.Runner(true).RunAsync(FixIds.RemoveStuckPackage, StuckPackage("Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9818.1.8"));
+        var result = await h.Runner(true).RunAsync(FixIds.RemoveStuckPackage, StuckPackage("Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.4000.1.8"));
 
         Assert.Equal(FixRunStatus.NotApplicable, result.Status);
         Assert.Contains("in-place repair install", result.Message, StringComparison.Ordinal);

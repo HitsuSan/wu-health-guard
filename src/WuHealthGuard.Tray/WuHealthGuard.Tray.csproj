@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>WuHealthGuard.Tray</RootNamespace>
+    <AssemblyName>WuHealthGuard</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Dynamic COM (WUA) and WinForms aren't trim-safe. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <!-- WinForms event handlers and UI strings: these rules are noise here. -->
+    <NoWarn>$(NoWarn);CA1303;CA2000;CA1031</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WuHealthGuard.Windows\WuHealthGuard.Windows.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WuHealthGuard.Core/WuHealthGuard.Core.csproj" />
+    <Project Path="src/WuHealthGuard.Tray/WuHealthGuard.Tray.csproj" />
+    <Project Path="src/WuHealthGuard.Windows/WuHealthGuard.Windows.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WuHealthGuard.Core.Tests/WuHealthGuard.Core.Tests.csproj" />
+  </Folder>
+</Solution>

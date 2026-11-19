@@ -32,6 +32,7 @@ internal sealed class TrayContext : ApplicationContext
     private ReportForm? _form;
     private AppSettings _settings = AppSettings.Load();
     private HealthReport? _last;
+    private readonly SemaphoreSlim _scanGate = new(1, 1);
     private bool _scanning;
     private bool _updating;
     private string? _runtimeWarnedFor;
@@ -89,7 +90,7 @@ internal sealed class TrayContext : ApplicationContext
         _icon.BalloonTipClicked += (_, _) => ShowReport();
 
         _timer.Interval = (int)TimeSpan.FromMinutes(Math.Max(5, _settings.ScanIntervalMinutes)).TotalMilliseconds;
-        _timer.Tick += async (_, _) => await ScanAsync(false);
+        _timer.Tick += async (_, _) => await ScanAsync(false, userInitiated: false);
         _timer.Start();
 
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
@@ -112,7 +113,7 @@ internal sealed class TrayContext : ApplicationContext
             _ = SelfUpdater.CleanUpOldVersionAsync();
         }
 
-        _ = ScanAsync(false);
+        _ = ScanAsync(false, userInitiated: false);
     }
 
     private static HttpClient CreateHttpClient()
@@ -239,29 +240,63 @@ internal sealed class TrayContext : ApplicationContext
         _icon.ShowBalloonTip(10_000, "Update rolled back", error, ToolTipIcon.Warning);
     }
 
-    private async Task ScanAsync(bool deepScan)
+    /// <summary>
+    /// Runs all checks off the UI thread. Timer and power-event scans are skipped while another scan runs;
+    /// scans the user asked for (and full scans) wait for it instead of being dropped.
+    /// </summary>
+    /// <returns>The new report, or null if the scan was skipped, stopped or failed.</returns>
+    private async Task<HealthReport?> ScanAsync(bool deepScan, bool userInitiated = true, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
     {
-        if (_scanning)
+        if (!userInitiated && _scanning)
         {
-            return;
+            return null;
+        }
+
+        try
+        {
+            await _scanGate.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return null; // Stopped while waiting for another check to finish.
         }
 
         _scanning = true;
         try
         {
             _app.ComponentStore.DeepScan = deepScan;
-            var report = await _app.Scanner.ScanAsync();
+            _app.ComponentStore.Progress = progress;
+            if (deepScan)
+            {
+                _app.Log.Write(ActionLogLevel.Info, "Full component store scan started.");
+            }
+
+            var report = await Task.Run(() => _app.Scanner.ScanAsync(cancellationToken), cancellationToken);
+            if (deepScan)
+            {
+                _app.Log.Write(ActionLogLevel.Info, $"Full component store scan finished: {_app.ComponentStore.LastResult?.State}.");
+            }
+
             Apply(report);
+            return report;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _app.Log.Write(ActionLogLevel.Info, "Full component store scan stopped by the user.");
+            return null;
         }
         catch (Exception ex)
         {
             _app.Log.Write(ActionLogLevel.Error, $"Scan failed: {ex.Message}");
             SetTooltip("WU Health Guard: check failed");
+            return null;
         }
         finally
         {
             _app.ComponentStore.DeepScan = false;
+            _app.ComponentStore.Progress = null;
             _scanning = false;
+            _scanGate.Release();
         }
     }
 
@@ -380,7 +415,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         try
         {
-            var form = _form ??= new ReportForm(_fixes, ScanAsync, _app.PauseController.GetStatus);
+            var form = _form ??= new ReportForm(_fixes, (deep, progress, ct) => ScanAsync(deep, userInitiated: true, progress, ct), _app.PauseController.GetStatus);
             if (_last is not null)
             {
                 form.ShowReport(_last);
@@ -409,7 +444,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         if (e.Mode == PowerModes.Resume)
         {
-            await ScanAsync(false);
+            await ScanAsync(false, userInitiated: false);
         }
     }
 
@@ -434,6 +469,7 @@ internal sealed class TrayContext : ApplicationContext
         if (disposing)
         {
             _timer.Dispose();
+            _scanGate.Dispose();
             _updateTimer.Dispose();
             _http.Dispose();
             _icon.Dispose();

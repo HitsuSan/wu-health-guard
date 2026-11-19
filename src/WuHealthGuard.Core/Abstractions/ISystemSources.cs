@@ -62,7 +62,8 @@ public sealed record ComponentStoreHealth(ComponentStoreState State, string? Mes
 public interface IComponentStoreProbe
 {
     /// <param name="deepScan">False: fast check of the stored corruption flag (DISM /CheckHealth). True: full scan (DISM /ScanHealth, minutes).</param>
-    Task<ComponentStoreHealth> CheckAsync(bool deepScan, CancellationToken cancellationToken);
+    /// <param name="progress">Percent done (0–100), when the scan reports it.</param>
+    Task<ComponentStoreHealth> CheckAsync(bool deepScan, IProgress<int>? progress, CancellationToken cancellationToken);
 }
 
 /// <summary>Mirrors WUA <c>UpdateOperation</c>.</summary>

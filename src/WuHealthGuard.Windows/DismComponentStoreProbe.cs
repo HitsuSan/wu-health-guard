@@ -15,12 +15,12 @@ public sealed class DismComponentStoreProbe : IComponentStoreProbe, IDisposable
     // The DISM API allows one initialization per process at a time.
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public async Task<ComponentStoreHealth> CheckAsync(bool deepScan, CancellationToken cancellationToken)
+    public async Task<ComponentStoreHealth> CheckAsync(bool deepScan, IProgress<int>? progress, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await Task.Run(() => Check(deepScan), cancellationToken).ConfigureAwait(false);
+            return await Task.Run(() => Check(deepScan, progress, cancellationToken), cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -28,15 +28,29 @@ public sealed class DismComponentStoreProbe : IComponentStoreProbe, IDisposable
         }
     }
 
-    private static ComponentStoreHealth Check(bool deepScan)
+    private static ComponentStoreHealth Check(bool deepScan, IProgress<int>? progress, CancellationToken cancellationToken)
     {
+        // DISM calls this as it works: pass on percent done, and ask it to stop when the user cancels.
+        void OnProgress(DismProgress p)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                p.Cancel = true;
+            }
+
+            if (p.Total > 0)
+            {
+                progress?.Report((int)Math.Clamp(100L * p.Current / p.Total, 0, 100));
+            }
+        }
+
         try
         {
             DismApi.Initialize(DismLogLevel.LogErrors);
             try
             {
                 using var session = DismApi.OpenOnlineSession();
-                return DismApi.CheckImageHealth(session, scanImage: deepScan) switch
+                return DismApi.CheckImageHealth(session, scanImage: deepScan, OnProgress) switch
                 {
                     DismImageHealthState.Healthy => new ComponentStoreHealth(ComponentStoreState.Healthy),
                     DismImageHealthState.Repairable => new ComponentStoreHealth(ComponentStoreState.Repairable),
@@ -48,6 +62,10 @@ public sealed class DismComponentStoreProbe : IComponentStoreProbe, IDisposable
             {
                 DismApi.Shutdown();
             }
+        }
+        catch (OperationCanceledException)
+        {
+            throw new OperationCanceledException("The component store scan was stopped.", cancellationToken);
         }
         catch (Exception ex) when (ex.HResult == ElevationRequired || ex is UnauthorizedAccessException)
         {

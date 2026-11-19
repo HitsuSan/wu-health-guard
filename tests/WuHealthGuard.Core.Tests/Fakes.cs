@@ -183,9 +183,10 @@ internal sealed class FakeProbe(ComponentStoreHealth health) : IComponentStorePr
 {
     public bool? LastDeepScan { get; private set; }
 
-    public Task<ComponentStoreHealth> CheckAsync(bool deepScan, CancellationToken cancellationToken)
+    public Task<ComponentStoreHealth> CheckAsync(bool deepScan, IProgress<int>? progress, CancellationToken cancellationToken)
     {
         LastDeepScan = deepScan;
+        progress?.Report(100);
         return Task.FromResult(health);
     }
 }

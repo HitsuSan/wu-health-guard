@@ -352,11 +352,22 @@ public class ComponentStoreCheckTests
     }
 
     [Fact]
-    public async Task Deep_scan_flag_is_passed_through()
+    public async Task Deep_scan_flag_progress_and_result_are_passed_through()
     {
         var probe = new FakeProbe(new ComponentStoreHealth(ComponentStoreState.Healthy));
-        await new ComponentStoreCheck(probe) { DeepScan = true }.RunAsync(CancellationToken.None);
+        var reported = new List<int>();
+        var check = new ComponentStoreCheck(probe) { DeepScan = true, Progress = new SyncProgress(reported.Add) };
+
+        await check.RunAsync(CancellationToken.None);
+
         Assert.True(probe.LastDeepScan);
+        Assert.Equal([100], reported);
+        Assert.Equal(ComponentStoreState.Healthy, check.LastResult?.State);
+    }
+
+    private sealed class SyncProgress(Action<int> report) : IProgress<int>
+    {
+        public void Report(int value) => report(value);
     }
 }
 

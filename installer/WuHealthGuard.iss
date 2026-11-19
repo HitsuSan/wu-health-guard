@@ -5,8 +5,9 @@
 ;
 ; What it does:
 ;   1. Stops a running copy.
-;   2. Installs the .NET Desktop Runtime if it's missing: downloads Microsoft's installer over HTTPS,
-;      refuses to run it unless it carries a valid Microsoft Authenticode signature, installs it silently.
+;   2. Installs the .NET Desktop Runtime if it's missing: downloads Microsoft's installer over HTTPS with a
+;      progress page, refuses to run it without a valid Microsoft Authenticode signature, and runs it with
+;      Microsoft's own progress window (no UI at all for /SILENT installs).
 ;   3. Copies WuHealthGuard.exe to Program Files and registers start at logon.
 ; Uninstall stops the app and removes the logon task. Logs and backups in ProgramData are kept.
 
@@ -100,23 +101,19 @@ begin
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+  Log(Format('Runtime installer signature check: exit code %d, accepted: %d', [ResultCode, Ord(Result)]));
 end;
 
-function InstallDesktopRuntime: String;
+{ Checks the downloaded runtime installer and runs it. Interactive: Microsoft's installer shows its own
+  progress window (/passive). Silent: no UI at all (/quiet). Returns an error message, or '' on success. }
+function RunRuntimeInstaller(ShowProgress: Boolean): String;
 var
-  Installer: String;
-  ResultCode: Integer;
+  Installer, Params: String;
+  ResultCode, ShowCmd: Integer;
 begin
   Result := '';
-  try
-    DownloadTemporaryFile('{#RuntimeUrl}', 'windowsdesktop-runtime.exe', '', nil);
-  except
-    Result := 'Couldn''t download the .NET {#RuntimeMajor} Desktop Runtime from Microsoft (' + GetExceptionMessage + '). ' +
-      'Check the internet connection, or install it from https://dotnet.microsoft.com/download/dotnet/{#RuntimeMajor}.0 and run Setup again.';
-    Exit;
-  end;
-
   Installer := ExpandConstant('{tmp}\windowsdesktop-runtime.exe');
+
   if not SignedByMicrosoft(Installer) then
   begin
     Result := 'The downloaded .NET runtime installer isn''t signed by Microsoft, so it wasn''t run. ' +
@@ -124,17 +121,100 @@ begin
     Exit;
   end;
 
-  if not Exec(Installer, '/install /quiet /norestart', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  if ShowProgress then
+  begin
+    Params := '/install /passive /norestart';
+    ShowCmd := SW_SHOWNORMAL;
+  end
+  else
+  begin
+    Params := '/install /quiet /norestart';
+    ShowCmd := SW_HIDE;
+  end;
+
+  Log('Running the .NET runtime installer: ' + Params);
+  if not Exec(Installer, Params, '', ShowCmd, ewWaitUntilTerminated, ResultCode) then
   begin
     Result := 'Couldn''t start the .NET runtime installer: ' + SysErrorMessage(ResultCode);
     Exit;
   end;
+  Log(Format('.NET runtime installer exit code: %d', [ResultCode]));
 
-  { 0: installed. 1638: a newer version already is. 3010: installed, Windows wants a restart. }
+  { 0: installed. 1638: a newer version already is. 3010: installed, Windows wants a restart. 1602: cancelled. }
   if ResultCode = 3010 then
     RuntimeNeedsRestart := True
+  else if ResultCode = 1602 then
+    Result := 'The .NET {#RuntimeMajor} Desktop Runtime installation was cancelled. WU Health Guard needs it to run.'
   else if (ResultCode <> 0) and (ResultCode <> 1638) then
     Result := 'The .NET {#RuntimeMajor} Desktop Runtime installer failed with code ' + IntToStr(ResultCode) + '.';
+
+  if (Result = '') and not DesktopRuntimeInstalled then
+    Result := 'The .NET {#RuntimeMajor} Desktop Runtime installer finished, but the runtime isn''t there. ' +
+      'Install it from https://dotnet.microsoft.com/download/dotnet/{#RuntimeMajor}.0 and run Setup again.';
+end;
+
+var
+  DownloadPage: TDownloadWizardPage;
+  RuntimeHandled: Boolean;
+
+function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
+begin
+  if (ProgressMax > 0) and (Progress = ProgressMax) then
+    Log(Format('Downloaded %s (%d bytes)', [FileName, Progress]));
+  Result := True;
+end;
+
+procedure InitializeWizard;
+begin
+  DownloadPage := CreateDownloadPage(
+    'Getting the .NET {#RuntimeMajor} Desktop Runtime',
+    'WU Health Guard needs it. Downloading from Microsoft...',
+    @OnDownloadProgress);
+end;
+
+{ Interactive installs: after "Install" is clicked, download the runtime with a visible progress page, then
+  run Microsoft's installer with its own progress window. Silent installs skip this and use PrepareToInstall. }
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Error: String;
+begin
+  Result := True;
+  if (CurPageID <> wpReady) or DesktopRuntimeInstalled then
+    Exit;
+
+  Log('.NET {#RuntimeMajor} Desktop Runtime is missing; downloading it.');
+  DownloadPage.Clear;
+  DownloadPage.Add('{#RuntimeUrl}', 'windowsdesktop-runtime.exe', '');
+  DownloadPage.Show;
+  try
+    try
+      DownloadPage.Download;
+    except
+      if DownloadPage.AbortedByUser then
+        Log('Runtime download cancelled by the user.')
+      else
+        { Keep #13#10 off the start of a line: there the preprocessor reads it as a directive. }
+        SuppressibleMsgBox('Couldn''t download the .NET {#RuntimeMajor} Desktop Runtime from Microsoft: ' + GetExceptionMessage + #13#10#13#10 +
+          'Check the internet connection and try again.', mbCriticalError, MB_OK, IDOK);
+      Result := False;
+      Exit;
+    end;
+
+    DownloadPage.SetText('Installing the .NET {#RuntimeMajor} Desktop Runtime',
+      'Microsoft''s installer shows its own progress window. This takes a minute or two.');
+    DownloadPage.ProgressBar.Style := npbstMarquee;
+    Error := RunRuntimeInstaller(True);
+    if Error <> '' then
+    begin
+      SuppressibleMsgBox(Error, mbCriticalError, MB_OK, IDOK);
+      Result := False;
+    end
+    else
+      RuntimeHandled := True;
+  finally
+    DownloadPage.ProgressBar.Style := npbstNormal;
+    DownloadPage.Hide;
+  end;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -146,11 +226,18 @@ begin
   { Stop a running copy so its exe can be replaced. }
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM WuHealthGuard.exe /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-  if not DesktopRuntimeInstalled then
+  { Silent installs (and anything the interactive step didn't cover) get the runtime here, without UI. }
+  if not RuntimeHandled and not DesktopRuntimeInstalled then
   begin
-    if not WizardSilent then
-      WizardForm.PreparingLabel.Caption := 'Installing the .NET {#RuntimeMajor} Desktop Runtime from Microsoft...';
-    Result := InstallDesktopRuntime;
+    Log('.NET {#RuntimeMajor} Desktop Runtime is missing; installing it silently.');
+    try
+      DownloadTemporaryFile('{#RuntimeUrl}', 'windowsdesktop-runtime.exe', '', @OnDownloadProgress);
+    except
+      Result := 'Couldn''t download the .NET {#RuntimeMajor} Desktop Runtime from Microsoft (' + GetExceptionMessage + '). ' +
+        'Check the internet connection, or install it from https://dotnet.microsoft.com/download/dotnet/{#RuntimeMajor}.0 and run Setup again.';
+      Exit;
+    end;
+    Result := RunRuntimeInstaller(False);
   end;
 end;
 

@@ -29,6 +29,7 @@ public static class BootTime
     public static bool WrittenBeforeBoot(DateTimeOffset? lastWrite, DateTimeOffset? lastBoot) =>
         lastWrite is { } written && lastBoot is { } boot && written < boot - Tolerance;
 
+    /// <summary>Local date and time in the user's own format, e.g. "11/9/2026 8:34 AM".</summary>
     public static string Format(DateTimeOffset? time) =>
-        time is { } t ? t.ToLocalTime().ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) : "unknown";
+        time is { } t ? t.ToLocalTime().ToString("g", System.Globalization.CultureInfo.CurrentCulture) : "unknown";
 }

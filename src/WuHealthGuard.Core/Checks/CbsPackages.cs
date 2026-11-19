@@ -54,15 +54,37 @@ public static class CbsPackages
         { } a => $"{(int)a.TotalDays} days",
     };
 
-    /// <summary>Lists packages for a finding's detail, capped so a big rollup doesn't flood the report.</summary>
-    public static string List(IEnumerable<CbsPackage> packages, DateTimeOffset now, int max = 15)
+    /// <summary>The build an identity belongs to: the last <c>~</c> field, e.g. <c>10.0.26100.4000</c>.</summary>
+    public static string BuildOf(string packageName)
     {
-        var all = packages.OrderBy(p => p.LastWrite ?? DateTimeOffset.MinValue).ToList();
-        var lines = all.Take(max).Select(p =>
-            $"  {p.Name}: {p.StateName} for {FormatAge(p.Age(now))} (since {BootTime.Format(p.LastWrite)})");
+        var tilde = packageName.LastIndexOf('~');
+        return tilde >= 0 && tilde < packageName.Length - 1 ? packageName[(tilde + 1)..] : "unknown build";
+    }
+
+    /// <summary>
+    /// One bullet per update build and state, largest first. An update is hundreds of packages that share a
+    /// build number, so this is what a person can act on; the names go in <see cref="Model.Finding.Items"/>.
+    /// </summary>
+    public static string Summarize(IEnumerable<CbsPackage> packages, DateTimeOffset now, int maxBuilds = 8)
+    {
+        var groups = packages
+            .GroupBy(p => (Build: BuildOf(p.Name), p.State))
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key.Build, StringComparer.Ordinal)
+            .ToList();
+
+        var lines = groups.Take(maxBuilds).Select(g =>
+            $"• Build {g.Key.Build}: {Count(g.Count(), "package")} {CbsPackageState.Describe(g.Key.State)} " +
+            $"for {FormatAge(g.Max(p => p.Age(now)))} (since {BootTime.Format(g.Min(p => p.LastWrite))})");
         var text = string.Join('\n', lines);
-        return all.Count > max
-            ? text + $"\n  …and {(all.Count - max).ToString(CultureInfo.InvariantCulture)} more"
+        return groups.Count > maxBuilds
+            ? text + $"\n• …and {(groups.Count - maxBuilds).ToString(CultureInfo.InvariantCulture)} more builds"
             : text;
     }
+
+    /// <summary>Every package name with its state, for the "show all" list in the report.</summary>
+    public static IReadOnlyList<string> Names(IEnumerable<CbsPackage> packages) =>
+        packages.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).Select(p => $"{p.Name} ({p.StateName})").ToList();
+
+    public static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n.ToString(CultureInfo.InvariantCulture)} {noun}s";
 }

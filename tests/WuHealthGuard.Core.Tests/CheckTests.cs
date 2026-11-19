@@ -316,18 +316,58 @@ public class FastStartupCheckTests
 
 public class ServicingActivityCheckTests
 {
-    [Fact]
-    public async Task TiWorker_running_blocks_restart()
+    private static Task<IReadOnlyList<Finding>> Run(FakeProcesses p) =>
+        new ServicingActivityCheck(p) { SampleWindow = TimeSpan.Zero }.RunAsync(CancellationToken.None);
+
+    private static FakeProcesses Worker(params double[] cpuMilliseconds)
     {
         var p = new FakeProcesses();
-        p.Running.Add("TiWorker");
-        var f = Assert.Single(await new ServicingActivityCheck(p).RunAsync(CancellationToken.None));
-        Assert.Equal(RestartImpact.Block, f.Impact);
+        p.Running.Add(ServicingActivityCheck.TiWorker);
+        foreach (var ms in cpuMilliseconds)
+        {
+            p.CpuTimes.Enqueue(TimeSpan.FromMilliseconds(ms));
+        }
+
+        return p;
     }
 
     [Fact]
-    public async Task Idle_is_fine() =>
-        Assert.Empty(await new ServicingActivityCheck(new FakeProcesses()).RunAsync(CancellationToken.None));
+    public async Task Not_running_is_fine() =>
+        Assert.Empty(await Run(new FakeProcesses()));
+
+    [Fact]
+    public async Task Working_tiworker_blocks_restart()
+    {
+        var f = Assert.Single(await Run(Worker(1000, 1800)));
+        Assert.Equal(ServicingActivityCheck.ActiveCode, f.Code);
+        Assert.Equal(RestartImpact.Block, f.Impact);
+        Assert.Contains("800 ms", f.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Idle_tiworker_after_a_scan_does_not_block_restart()
+    {
+        var f = Assert.Single(await Run(Worker(1000, 1010)));
+        Assert.Equal(ServicingActivityCheck.IdleCode, f.Code);
+        Assert.Equal(Severity.Info, f.Severity);
+        Assert.Equal(RestartImpact.None, f.Impact);
+    }
+
+    [Fact]
+    public async Task Unreadable_cpu_is_treated_as_working()
+    {
+        var p = new FakeProcesses();
+        p.Running.Add(ServicingActivityCheck.TiWorker);
+        Assert.Equal(ServicingActivityCheck.ActiveCode, Assert.Single(await Run(p)).Code);
+    }
+
+    [Fact]
+    public async Task Exiting_while_watched_is_fine()
+    {
+        var p = Worker(1000, 1000);
+        p.ExitAfterReadings = 1;
+        Assert.Empty(await Run(p));
+    }
 }
 
 public class ComponentStoreCheckTests

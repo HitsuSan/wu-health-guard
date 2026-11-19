@@ -21,7 +21,11 @@ internal static class SelfUpdater
     private static string OldExe => CurrentExe + ".old";
 
     /// <summary>Returns null if the new version is running (the caller must exit now), otherwise why it was rolled back.</summary>
-    public static string? Apply(string downloadedExe, string expectedSha256, string newVersion, IActionLog log)
+    /// <remarks>
+    /// Call on the UI thread: the single-instance slot is a mutex owned by that thread. The wait for the new
+    /// version runs on a worker thread, so the UI (and the tray's progress animation) keeps running meanwhile.
+    /// </remarks>
+    public static async Task<string?> ApplyAsync(string downloadedExe, string expectedSha256, string newVersion, IActionLog log)
     {
         // Re-check right before use; the file sits in an admin-only folder, but this costs nothing.
         using (var stream = File.OpenRead(downloadedExe))
@@ -55,7 +59,7 @@ internal static class SelfUpdater
             start.ArgumentList.Add(AfterUpdateSwitch);
             start.ArgumentList.Add(AppInfo.Version);
             process = Process.Start(start);
-            if (process is not null && started.WaitOne(StartTimeout))
+            if (process is not null && await Task.Run(() => started.WaitOne(StartTimeout)))
             {
                 TryDelete(downloadedExe);
                 return null;

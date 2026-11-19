@@ -31,7 +31,7 @@ public sealed class WindowsBackupService(IProcessRunner processes) : IBackupServ
 
             case BackupItem.RegistryKey k:
                 var file = Path.Combine(backupDirectory, SafeName(k.Path) + ".reg");
-                var result = await processes.RunAsync("reg.exe", ["export", k.Path, file, "/y", "/reg:64"], TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
+                var result = await processes.RunAsync("reg.exe", ["export", k.Path, file, "/y", "/reg:64"], TimeSpan.FromMinutes(2), null, cancellationToken).ConfigureAwait(false);
                 if (result.ExitCode != 0 || !File.Exists(file))
                 {
                     throw new IOException($"reg export failed (exit {result.ExitCode}): {result.Tail(2)}");

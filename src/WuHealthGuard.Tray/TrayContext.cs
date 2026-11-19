@@ -33,6 +33,12 @@ internal sealed class TrayContext : ApplicationContext
     private AppSettings _settings = AppSettings.Load();
     private HealthReport? _last;
     private readonly SemaphoreSlim _scanGate = new(1, 1);
+
+    /// <summary>Everything the app is doing; shown in the window and animated in the tray.</summary>
+    private readonly ActivityCenter _activities = new();
+    private readonly System.Windows.Forms.Timer _animation = new() { Interval = 400 };
+    private int _animationFrame;
+    private string _idleTooltip = "WU Health Guard";
     private bool _scanning;
     private bool _updating;
     private string? _runtimeWarnedFor;
@@ -41,6 +47,12 @@ internal sealed class TrayContext : ApplicationContext
     public TrayContext(string? updatedFrom = null)
     {
         TrySecureDataFolder();
+        _activities.Changed += RefreshTrayActivity;
+        _animation.Tick += (_, _) =>
+        {
+            _animationFrame++;
+            RefreshTrayActivity();
+        };
         _updates = new UpdateClient(_http, AppInfo.Version, AppInfo.UpdateFeedUrl, AppInfo.UpdatePublicKey);
 
         _fixes = _app.CreateFixRunner(
@@ -157,6 +169,7 @@ internal sealed class TrayContext : ApplicationContext
         }
 
         _updating = true;
+        using var activity = _activities.Begin(ActivityKind.Update, "Checking for updates");
         try
         {
             var check = await _updates.CheckAsync(CancellationToken.None);
@@ -208,8 +221,8 @@ internal sealed class TrayContext : ApplicationContext
 
     private async Task InstallUpdateAsync(UpdateManifest manifest, bool userInitiated)
     {
-        // Never swap the app out in the middle of a scan or a fix; the next check will try again.
-        if (!userInitiated && (_scanning || _form?.IsBusy == true))
+        // Never swap the app out in the middle of a check, scan or fix; the next check will try again.
+        if (!userInitiated && _activities.Any(ActivityKind.Check, ActivityKind.FullScan, ActivityKind.Fix))
         {
             return;
         }
@@ -229,8 +242,15 @@ internal sealed class TrayContext : ApplicationContext
         }
 
         _app.Log.Write(ActionLogLevel.Info, $"Downloading {manifest.Version} from {manifest.Url}.");
-        var file = await _updates.DownloadAsync(manifest, CancellationToken.None);
-        var error = SelfUpdater.Apply(file, manifest.Sha256, manifest.Version, _app.Log);
+        string? error;
+        using (var activity = _activities.Begin(ActivityKind.Update, $"Updating to version {manifest.Version}"))
+        {
+            activity.Report("Downloading", 0);
+            var file = await _updates.DownloadAsync(manifest, new Progress<int>(p => activity.Report("Downloading", p)), CancellationToken.None);
+            activity.Report("Installing and restarting", null);
+            error = await SelfUpdater.ApplyAsync(file, manifest.Sha256, manifest.Version, _app.Log);
+        }
+
         if (error is null)
         {
             ExitThread();
@@ -241,33 +261,45 @@ internal sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>
-    /// Runs all checks off the UI thread. Timer and power-event scans are skipped while another scan runs;
-    /// scans the user asked for (and full scans) wait for it instead of being dropped.
+    /// Runs all checks off the UI thread, as a visible activity. Timer and power-event checks are skipped while
+    /// another check runs; checks the user asked for (and full scans) wait for it instead of being dropped.
+    /// A full scan (component store ScanHealth) reports percent done and can be stopped.
     /// </summary>
-    /// <returns>The new report, or null if the scan was skipped, stopped or failed.</returns>
-    private async Task<HealthReport?> ScanAsync(bool deepScan, bool userInitiated = true, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
+    private async Task<ScanOutcome> ScanAsync(bool deepScan, bool userInitiated = true)
     {
         if (!userInitiated && _scanning)
         {
-            return null;
+            return ScanOutcome.Skipped;
         }
+
+        using var stop = deepScan ? new CancellationTokenSource() : null;
+        var cancellationToken = stop?.Token ?? CancellationToken.None;
+        using var activity = deepScan
+            ? _activities.Begin(ActivityKind.FullScan, "Full component store scan (read-only, usually 10–30 minutes)", stop)
+            : _activities.Begin(ActivityKind.Check, "Checking Windows Update health");
 
         try
         {
+            if (_scanning)
+            {
+                activity.Report("Waiting for the current check to finish", null);
+            }
+
             await _scanGate.WaitAsync(cancellationToken);
         }
         catch (OperationCanceledException)
         {
-            return null; // Stopped while waiting for another check to finish.
+            return new ScanOutcome(null, Stopped: true); // Stopped while waiting for another check to finish.
         }
 
         _scanning = true;
         try
         {
             _app.ComponentStore.DeepScan = deepScan;
-            _app.ComponentStore.Progress = progress;
+            _app.ComponentStore.Progress = deepScan ? new Progress<int>(p => activity.Report("Scanning", p)) : null;
             if (deepScan)
             {
+                activity.Report("Starting DISM", null);
                 _app.Log.Write(ActionLogLevel.Info, "Full component store scan started.");
             }
 
@@ -278,18 +310,18 @@ internal sealed class TrayContext : ApplicationContext
             }
 
             Apply(report);
-            return report;
+            return new ScanOutcome(report, Stopped: false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             _app.Log.Write(ActionLogLevel.Info, "Full component store scan stopped by the user.");
-            return null;
+            return new ScanOutcome(null, Stopped: true);
         }
         catch (Exception ex)
         {
             _app.Log.Write(ActionLogLevel.Error, $"Scan failed: {ex.Message}");
             SetTooltip("WU Health Guard: check failed");
-            return null;
+            return ScanOutcome.Skipped;
         }
         finally
         {
@@ -297,6 +329,31 @@ internal sealed class TrayContext : ApplicationContext
             _app.ComponentStore.Progress = null;
             _scanning = false;
             _scanGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The tray reflects the current activity: an animated "working" icon and a tooltip saying what's happening.
+    /// When idle, the verdict icon and tooltip are back.
+    /// </summary>
+    private void RefreshTrayActivity()
+    {
+        if (_activities.Current is { } activity)
+        {
+            if (!_animation.Enabled)
+            {
+                _animation.Start();
+            }
+
+            var color = _last is null ? System.Drawing.Color.Gray : TrayIcons.Color(_last.Verdict);
+            _icon.Icon = TrayIcons.Working(color, _animationFrame);
+            SetIconText($"WU Health Guard: {activity.Describe(withElapsed: false)}");
+        }
+        else
+        {
+            _animation.Stop();
+            _icon.Icon = _last is null ? TrayIcons.Unknown : TrayIcons.For(_last.Verdict);
+            SetIconText(_idleTooltip);
         }
     }
 
@@ -318,7 +375,6 @@ internal sealed class TrayContext : ApplicationContext
 
         _last = report;
         var verdict = report.Verdict;
-        _icon.Icon = TrayIcons.For(verdict);
         _verdictItem.Text = verdict.Headline();
         var top = report.Ordered.FirstOrDefault();
         SetTooltip($"WU Health Guard: {verdict.Headline()}" + (top is null ? "" : $"\n{top.Title}"));
@@ -415,7 +471,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         try
         {
-            var form = _form ??= new ReportForm(_fixes, (deep, progress, ct) => ScanAsync(deep, userInitiated: true, progress, ct), _app.PauseController.GetStatus);
+            var form = _form ??= new ReportForm(_fixes, deep => ScanAsync(deep), _app.PauseController.GetStatus, _activities);
             if (_last is not null)
             {
                 form.ShowReport(_last);
@@ -437,8 +493,21 @@ internal sealed class TrayContext : ApplicationContext
         }
     }
 
-    private void SetTooltip(string text) =>
-        _icon.Text = text.Length > MaxTooltip ? text[..(MaxTooltip - 1)] + "…" : text;
+    /// <summary>Sets what the tray shows when the app is idle (an activity's text takes over while one runs).</summary>
+    private void SetTooltip(string text)
+    {
+        _idleTooltip = text;
+        RefreshTrayActivity();
+    }
+
+    private void SetIconText(string text)
+    {
+        var fitted = text.Length > MaxTooltip ? text[..(MaxTooltip - 1)] + "…" : text;
+        if (_icon.Text != fitted)
+        {
+            _icon.Text = fitted;
+        }
+    }
 
     private async void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
     {
@@ -459,6 +528,7 @@ internal sealed class TrayContext : ApplicationContext
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         _timer.Stop();
         _updateTimer.Stop();
+        _animation.Stop();
         _guard.BlockReason = null;
         _icon.Visible = false;
         base.ExitThreadCore();
@@ -469,6 +539,7 @@ internal sealed class TrayContext : ApplicationContext
         if (disposing)
         {
             _timer.Dispose();
+            _animation.Dispose();
             _scanGate.Dispose();
             _updateTimer.Dispose();
             _http.Dispose();

@@ -155,10 +155,16 @@ internal sealed class FakeProcesses : IProcessInfo, IProcessRunner
 
     public bool IsRunning(string processName) => Running.Contains(processName);
 
-    public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken)
+    public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, Action<string>? onOutputLine, CancellationToken cancellationToken)
     {
         Runs.Add((fileName, arguments));
-        return Task.FromResult(Handler(fileName, arguments));
+        var result = Handler(fileName, arguments);
+        foreach (var line in result.Output.Split('\n'))
+        {
+            onOutputLine?.Invoke(line);
+        }
+
+        return Task.FromResult(result);
     }
 }
 
@@ -242,4 +248,12 @@ internal sealed class FakePause : IUpdatePauseController
     public void Pause(DateTimeOffset until) => Status = new PauseStatus(true, until);
 
     public void Unpause() => Status = PauseStatus.NotPaused;
+}
+
+/// <summary>Records progress synchronously (Progress&lt;T&gt; would post it to another thread in tests).</summary>
+internal sealed class ListProgress<T> : IProgress<T>
+{
+    public List<T> Items { get; } = [];
+
+    public void Report(T value) => Items.Add(value);
 }

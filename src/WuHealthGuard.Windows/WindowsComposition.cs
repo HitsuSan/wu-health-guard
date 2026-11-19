@@ -8,7 +8,9 @@ namespace WuHealthGuard.Windows;
 /// <summary>Wires the core logic to the real Windows implementations.</summary>
 public sealed class WindowsComposition : IDisposable
 {
-    private readonly DismComponentStoreProbe _dism = new();
+    /// <summary>DISM runs in a helper process: this app's own exe with <see cref="DismComponentStoreProbe.HelperSwitch"/>.</summary>
+    private readonly DismComponentStoreProbe _dism = new(
+        Environment.ProcessPath ?? throw new InvalidOperationException("Can't determine the executable path."));
 
     public WindowsComposition(TimeProvider? time = null)
     {

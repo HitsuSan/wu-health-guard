@@ -29,7 +29,7 @@ public sealed class ComponentStoreCheck(IComponentStoreProbe probe) : IHealthChe
     {
         var health = await probe.CheckAsync(DeepScan, Progress, cancellationToken).ConfigureAwait(false);
         LastResult = health;
-        var suffix = string.IsNullOrWhiteSpace(health.Message) ? "" : $"\nDISM: {health.Message}";
+        var suffix = string.IsNullOrWhiteSpace(health.Message) ? "" : $"\n\n{health.Message}";
 
         return health.State switch
         {
@@ -72,7 +72,7 @@ public sealed class ComponentStoreCheck(IComponentStoreProbe probe) : IHealthChe
                     Severity.Info,
                     RestartImpact.None,
                     "Couldn't check the component store",
-                    "The DISM health check didn't return a result. It needs administrator rights." + suffix),
+                    "The DISM check didn't give a result, so damage in the component store can't be ruled out." + suffix),
             ],
         };
     }

@@ -10,7 +10,8 @@ public sealed record ProcessResult(int ExitCode, string Output)
 public interface IProcessRunner
 {
     /// <summary>Runs a program to completion and captures stdout+stderr. Arguments are passed individually (no shell).</summary>
-    Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken);
+    /// <param name="onOutputLine">Called with each output line as it arrives (e.g. to read a progress percentage).</param>
+    Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, Action<string>? onOutputLine, CancellationToken cancellationToken);
 }
 
 public interface IServiceControl

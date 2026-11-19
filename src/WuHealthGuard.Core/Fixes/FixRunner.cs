@@ -44,7 +44,13 @@ public sealed class FixRunner(
     }
 
     /// <param name="report">The latest scan. Pass it whenever there is one, so fixes can refuse unsafe states.</param>
-    public async Task<FixRunResult> RunAsync(string fixId, Finding? finding, HealthReport? report = null, CancellationToken cancellationToken = default)
+    /// <param name="progress">Steps and percent done, for the progress display.</param>
+    public async Task<FixRunResult> RunAsync(
+        string fixId,
+        Finding? finding,
+        HealthReport? report = null,
+        IProgress<FixProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         if (Find(fixId) is not { } fix)
         {
@@ -66,6 +72,7 @@ public sealed class FixRunner(
 
         if (fix.Risk == FixRisk.Risky)
         {
+            progress?.Report(new FixProgress("Waiting for your confirmation"));
             if (!await prompt.ConfirmAsync(new ConfirmationRequest(fix, finding, plan), cancellationToken).ConfigureAwait(false))
             {
                 log.Write(ActionLogLevel.Info, $"Declined by user{target}.", fix.Id);
@@ -80,6 +87,9 @@ public sealed class FixRunner(
             backupDir = Path.Join(backupRoot, $"{stamp}-{fix.Id}");
             foreach (var item in plan)
             {
+                progress?.Report(new FixProgress(item is BackupItem.RestorePoint
+                    ? "Creating a restore point (can take a minute)"
+                    : $"Backing up {Describe(item)}"));
                 try
                 {
                     await backup.BackupAsync(item, backupDir, cancellationToken).ConfigureAwait(false);
@@ -103,7 +113,9 @@ public sealed class FixRunner(
         log.Write(ActionLogLevel.Info, $"Starting{target}.", fix.Id);
         try
         {
-            var result = await fix.ApplyAsync(new FixContext(finding, log, stamp), cancellationToken).ConfigureAwait(false);
+            progress?.Report(new FixProgress(fix.Title));
+            var context = new FixContext(finding, log, stamp) { Progress = progress };
+            var result = await fix.ApplyAsync(context, cancellationToken).ConfigureAwait(false);
             log.Write(result.Success ? ActionLogLevel.Info : ActionLogLevel.Error,
                 (result.Success ? "Succeeded: " : "Failed: ") + result.Message, fix.Id);
             return new FixRunResult(result.Success ? FixRunStatus.Succeeded : FixRunStatus.Failed, result.Message, backupDir, result.RestartRequired);

@@ -77,7 +77,7 @@ public sealed class WindowsProcesses : IProcessInfo, IProcessRunner
         return processes.Length > 0;
     }
 
-    public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken)
+    public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, Action<string>? onOutputLine, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
@@ -105,11 +105,14 @@ public sealed class WindowsProcesses : IProcessInfo, IProcessRunner
                 return;
             }
 
+            // sfc.exe writes UTF-16 when redirected; strip the NULs that leaves in the text.
+            var line = e.Data.Replace("\0", "", StringComparison.Ordinal);
             lock (output)
             {
-                // sfc.exe writes UTF-16 when redirected; strip the NULs that leaves in the text.
-                output.AppendLine(e.Data.Replace("\0", "", StringComparison.Ordinal));
+                output.AppendLine(line);
             }
+
+            onOutputLine?.Invoke(line);
         }
 
         process.OutputDataReceived += Append;

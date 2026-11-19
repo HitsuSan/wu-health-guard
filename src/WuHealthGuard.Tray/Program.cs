@@ -1,4 +1,6 @@
+using WuHealthGuard.Core.Abstractions;
 using WuHealthGuard.Core.Updates;
+using WuHealthGuard.Windows;
 
 namespace WuHealthGuard.Tray;
 
@@ -21,6 +23,8 @@ internal static class Program
                 return StartupTask.Uninstall(quiet);
             case "--GENERATE-UPDATE-KEY":
                 return GenerateUpdateKey();
+            case var c when string.Equals(c, DismComponentStoreProbe.HelperSwitch, StringComparison.OrdinalIgnoreCase):
+                return RunComponentStoreHelper(args.Skip(1).Any(a => string.Equals(a, DismComponentStoreProbe.DeepSwitch, StringComparison.OrdinalIgnoreCase)));
             case var c when string.Equals(c, SelfUpdater.AfterUpdateSwitch, StringComparison.OrdinalIgnoreCase):
                 updatedFrom = args.ElementAtOrDefault(1) ?? "?";
                 break;
@@ -67,6 +71,29 @@ internal static class Program
             SingleInstance.Release();
         }
 
+        return 0;
+    }
+
+    /// <summary>
+    /// Helper mode: runs the DISM check and reports over stdout (see <see cref="ComponentStoreProtocol"/>). The app
+    /// starts this as a separate process so a DISM that hangs can be stopped without stopping the app.
+    /// </summary>
+    private static int RunComponentStoreHelper(bool deepScan)
+    {
+        // UTF-8 on both ends, so localized DISM messages survive. No console exists in this GUI exe, so write to
+        // the redirected stdout handle directly.
+        using var output = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = true };
+        ComponentStoreHealth health;
+        try
+        {
+            health = DismHealthScan.Run(deepScan, percent => output.WriteLine(ComponentStoreProtocol.Progress(percent)));
+        }
+        catch (Exception ex)
+        {
+            health = new ComponentStoreHealth(ComponentStoreState.Unknown, $"The DISM check failed: {ex.Message}");
+        }
+
+        output.WriteLine(ComponentStoreProtocol.Result(health));
         return 0;
     }
 

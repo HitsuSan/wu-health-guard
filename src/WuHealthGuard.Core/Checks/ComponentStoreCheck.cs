@@ -19,10 +19,17 @@ public sealed class ComponentStoreCheck(IComponentStoreProbe probe) : IHealthChe
     /// <summary>Run a full ScanHealth instead of the quick CheckHealth. Takes minutes.</summary>
     public bool DeepScan { get; set; }
 
+    /// <summary>Receives percent done during a full scan.</summary>
+    public IProgress<int>? Progress { get; set; }
+
+    /// <summary>The probe result of the last run, so the UI can say what a full scan found even when it's "healthy".</summary>
+    public ComponentStoreHealth? LastResult { get; private set; }
+
     public async Task<IReadOnlyList<Finding>> RunAsync(CancellationToken cancellationToken)
     {
-        var health = await probe.CheckAsync(DeepScan, cancellationToken).ConfigureAwait(false);
-        var suffix = string.IsNullOrWhiteSpace(health.Message) ? "" : $"\nDISM: {health.Message}";
+        var health = await probe.CheckAsync(DeepScan, Progress, cancellationToken).ConfigureAwait(false);
+        LastResult = health;
+        var suffix = string.IsNullOrWhiteSpace(health.Message) ? "" : $"\n\n{health.Message}";
 
         return health.State switch
         {
@@ -65,7 +72,7 @@ public sealed class ComponentStoreCheck(IComponentStoreProbe probe) : IHealthChe
                     Severity.Info,
                     RestartImpact.None,
                     "Couldn't check the component store",
-                    "The DISM health check didn't return a result. It needs administrator rights." + suffix),
+                    "The DISM check didn't give a result, so damage in the component store can't be ruled out." + suffix),
             ],
         };
     }

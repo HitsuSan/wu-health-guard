@@ -37,7 +37,8 @@ public sealed class UpdateClient(HttpClient http, string currentVersion, string?
     }
 
     /// <summary>Downloads into the locked-down updates folder and checks the SHA-256. Returns the file path.</summary>
-    public async Task<string> DownloadAsync(UpdateManifest manifest, CancellationToken cancellationToken)
+    /// <param name="progress">Percent downloaded.</param>
+    public async Task<string> DownloadAsync(UpdateManifest manifest, IProgress<int>? progress, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         if (manifest.Size > MaxDownloadBytes)
@@ -70,6 +71,11 @@ public sealed class UpdateClient(HttpClient http, string currentVersion, string?
                     while ((read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
                     {
                         total += read;
+                        if (manifest.Size > 0)
+                        {
+                            progress?.Report((int)Math.Clamp(100 * total / manifest.Size, 0, 100));
+                        }
+
                         if (total > MaxDownloadBytes)
                         {
                             throw new InvalidOperationException("The update download is larger than allowed.");

@@ -41,7 +41,9 @@ internal sealed class ReportForm : Form
     };
 
     private readonly FixRunner _fixes;
-    private readonly Func<bool, Task> _rescan;
+    /// <summary>Runs a check (full component store scan when true). It registers itself as an activity.</summary>
+    private readonly Func<bool, Task<ScanOutcome>> _rescan;
+    private readonly ActivityCenter _activities;
     private readonly Func<PauseStatus> _pauseStatus;
 
     private readonly TableLayoutPanel _header = new() { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2 };
@@ -79,7 +81,11 @@ internal sealed class ReportForm : Form
     private readonly Label _status = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
     private readonly Button _rescanButton = new() { Text = "Check again", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Button _deepButton = new() { Text = "Full component store scan", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly ProgressBar _progress = new() { Visible = false, Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 30, Dock = DockStyle.Fill };
     private readonly ToolTip _tips = new();
+    private readonly System.Windows.Forms.Timer _elapsedTicker = new() { Interval = 1000 };
+    private string _idleStatus = "";
+    private string? _note;
 
     private Font _titleFont = null!;
     private Font _boldFont = null!;
@@ -88,13 +94,13 @@ internal sealed class ReportForm : Form
     private HealthReport? _report;
     private Finding? _shown;
     private bool _showItems;
-    private bool _busy;
     private bool _splitPlaced;
 
-    public ReportForm(FixRunner fixes, Func<bool, Task> rescan, Func<PauseStatus> pauseStatus)
+    public ReportForm(FixRunner fixes, Func<bool, Task<ScanOutcome>> rescan, Func<PauseStatus> pauseStatus, ActivityCenter activities)
     {
         _fixes = fixes;
         _rescan = rescan;
+        _activities = activities;
         _pauseStatus = pauseStatus;
 
         SuspendLayout();
@@ -175,8 +181,22 @@ internal sealed class ReportForm : Form
         _split.SplitterWidth = LogicalToDeviceUnits(6);
 
         // Bottom bar.
-        _rescanButton.Click += async (_, _) => await RunBusyAsync(() => _rescan(false), "Checking…");
-        _deepButton.Click += async (_, _) => await RunBusyAsync(() => _rescan(true), "Scanning the component store; this can take several minutes…");
+        _rescanButton.Click += async (_, _) =>
+        {
+            _note = null;
+            await _rescan(false);
+        };
+        _deepButton.Click += async (_, _) =>
+        {
+            if (_activities.Running(ActivityKind.FullScan) is { Stop: { } stop })
+            {
+                stop.Cancel();
+                RefreshActivity();
+                return;
+            }
+
+            await RunDeepScanAsync();
+        };
         _tips.SetToolTip(_deepButton,
             "Runs DISM /ScanHealth: reads every file in the component store. Read-only, but takes several minutes.\n" +
             "The regular check only reads the result of the last scan, so it can miss damage nobody has scanned for yet.");
@@ -184,15 +204,18 @@ internal sealed class ReportForm : Form
         {
             Dock = DockStyle.Fill,
             AutoSize = true,
-            ColumnCount = 3,
+            ColumnCount = 4,
             Padding = new Padding(LogicalToDeviceUnits(10), LogicalToDeviceUnits(6), LogicalToDeviceUnits(10), LogicalToDeviceUnits(6)),
         };
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, LogicalToDeviceUnits(170)));
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _progress.Margin = new Padding(LogicalToDeviceUnits(8), LogicalToDeviceUnits(9), LogicalToDeviceUnits(10), LogicalToDeviceUnits(9));
         bottom.Controls.Add(_status, 0, 0);
-        bottom.Controls.Add(_deepButton, 1, 0);
-        bottom.Controls.Add(_rescanButton, 2, 0);
+        bottom.Controls.Add(_progress, 1, 0);
+        bottom.Controls.Add(_deepButton, 2, 0);
+        bottom.Controls.Add(_rescanButton, 3, 0);
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -204,12 +227,74 @@ internal sealed class ReportForm : Form
         root.Controls.Add(bottom, 0, 2);
         Controls.Add(root);
 
+        // Until the first report arrives: say so, instead of an empty window.
+        _headline.Text = "Checking…";
+        _subline.Text = "Looking at Windows Update, servicing and the component store.";
+        _header.BackColor = _headline.BackColor = _subline.BackColor = Color.FromArgb(0x6B, 0x72, 0x80);
+        _links.Visible = _fixesHeader.Visible = false;
+
+        _activities.Changed += RefreshActivity;
+        _elapsedTicker.Tick += (_, _) => RefreshActivity();
+
         ResumeLayout(false);
         PerformLayout();
+        RefreshActivity();
     }
 
-    /// <summary>True while a fix or scan started from this window is running.</summary>
-    public bool IsBusy => _busy;
+    /// <summary>
+    /// Shows what the app is doing (from any source: automatic checks, full scans, fixes, updates) in the bottom
+    /// bar: a progress bar with percent when known, the current step and the elapsed time. Buttons that would
+    /// collide with the running work are disabled; a full scan turns its button into Stop.
+    /// </summary>
+    private void RefreshActivity()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        var current = _activities.Current;
+        var heavy = _activities.Any(ActivityKind.Check, ActivityKind.FullScan, ActivityKind.Fix);
+        _rescanButton.Enabled = _fixButtons.Enabled = !heavy;
+
+        if (_activities.Running(ActivityKind.FullScan) is { } fullScan)
+        {
+            var stopping = fullScan.Stop?.IsCancellationRequested == true;
+            _deepButton.Text = stopping ? "Stopping…" : "Stop scan";
+            _deepButton.Enabled = !stopping && fullScan.Stop is not null;
+        }
+        else
+        {
+            _deepButton.Text = "Full component store scan";
+            _deepButton.Enabled = !heavy;
+        }
+
+        if (current is null)
+        {
+            _elapsedTicker.Stop();
+            _progress.Visible = false;
+            _status.Text = _note is null ? _idleStatus : $"{_note}  ·  {_idleStatus}";
+            return;
+        }
+
+        if (!_elapsedTicker.Enabled)
+        {
+            _elapsedTicker.Start();
+        }
+
+        _progress.Visible = true;
+        if (current.Percent is { } percent)
+        {
+            _progress.Style = ProgressBarStyle.Continuous;
+            _progress.Value = percent;
+        }
+        else if (_progress.Style != ProgressBarStyle.Marquee)
+        {
+            _progress.Style = ProgressBarStyle.Marquee;
+        }
+
+        _status.Text = current.Describe();
+    }
 
     protected override void OnLoad(EventArgs e)
     {
@@ -279,8 +364,9 @@ internal sealed class ReportForm : Form
         _subline.Text = Summary(report);
         _header.BackColor = _headline.BackColor = _subline.BackColor = color;
         Icon = TrayIcons.For(verdict);
-        _status.Text = $"Checked {BootTime.Format(report.Timestamp)}  ·  Last restart {BootTime.Format(report.LastBootTime)}" +
+        _idleStatus = $"Checked {BootTime.Format(report.Timestamp)}  ·  Last restart {BootTime.Format(report.LastBootTime)}" +
             (report.Errors.Count > 0 ? $"  ·  {report.Errors.Count} check(s) couldn't run" : "");
+        RefreshActivity();
 
         var selected = _list.SelectedItems.Count > 0 ? _list.SelectedItems[0].Tag as Finding : null;
 
@@ -585,9 +671,22 @@ internal sealed class ReportForm : Form
 
     private async Task RunFixAsync(IFix fix, Finding finding)
     {
-        FixRunResult? result = null;
-        await RunBusyAsync(async () => result = await _fixes.RunAsync(fix.Id, finding, _report), $"Running: {fix.Title}…");
-        if (result is null || result.Status == FixRunStatus.Cancelled)
+        if (_activities.Any(ActivityKind.Fix, ActivityKind.FullScan))
+        {
+            return;
+        }
+
+        _note = null;
+        FixRunResult result;
+        using (var activity = _activities.Begin(ActivityKind.Fix, $"Fixing: {fix.Title}"))
+        {
+            var progress = new Progress<FixProgress>(p => activity.Report(p.Step, p.Percent));
+
+            // Fixes aren't stoppable halfway (a half-applied fix is worse than either state), so no token.
+            result = await _fixes.RunAsync(fix.Id, finding, _report, progress, CancellationToken.None);
+        }
+
+        if (result.Status == FixRunStatus.Cancelled)
         {
             return;
         }
@@ -596,41 +695,52 @@ internal sealed class ReportForm : Form
         var message = result.Message + (result.BackupDirectory is null ? "" : $"\n\nBackup: {result.BackupDirectory}") +
             (result.RestartRequired ? "\n\nA restart is needed to finish." : "");
         MessageBox.Show(this, message, $"{fix.Title}: {result.Status}", MessageBoxButtons.OK, icon);
-        await RunBusyAsync(() => _rescan(false), "Checking…");
+        await _rescan(false);
     }
 
-    private async Task RunBusyAsync(Func<Task> action, string status)
+    /// <summary>
+    /// Full component store scan (DISM /ScanHealth): read-only but long. Progress, elapsed time and Stop come
+    /// from its activity; this always ends with a clear result, including "no damage found".
+    /// </summary>
+    private async Task RunDeepScanAsync()
     {
-        if (_busy)
+        if (_activities.Any(ActivityKind.FullScan, ActivityKind.Fix))
         {
             return;
         }
 
-        _busy = true;
-        UseWaitCursor = true;
-        _rescanButton.Enabled = _deepButton.Enabled = _fixButtons.Enabled = false;
-        var previous = _status.Text;
-        _status.Text = status;
-        try
+        _note = null;
+        var outcome = await _rescan(true);
+        if (outcome.Stopped)
         {
-            await action();
+            _note = "Full component store scan stopped";
+            RefreshActivity();
+            return;
         }
-        finally
+
+        if (outcome.Report is not { } report)
         {
-            _busy = false;
-            UseWaitCursor = false;
-            _rescanButton.Enabled = _deepButton.Enabled = _fixButtons.Enabled = true;
-            if (_status.Text == status)
-            {
-                _status.Text = previous;
-            }
+            MessageBox.Show(this, "The full component store scan couldn't finish. The log folder has the details.",
+                "WU Health Guard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
         }
+
+        var store = report.Findings.FirstOrDefault(f => f.CheckId == ComponentStoreCheck.CheckId);
+        _note = store is null ? "Full scan: no damage found" : $"Full scan: {store.Title}";
+        RefreshActivity();
+        MessageBox.Show(this,
+            store is null
+                ? "Full component store scan finished: no damage found."
+                : $"Full component store scan finished: {store.Title}.\n\nSelect it in the list for details and what to do.",
+            "WU Health Guard", MessageBoxButtons.OK, store is null ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
+            _activities.Changed -= RefreshActivity;
+            _elapsedTicker.Dispose();
             _tips.Dispose();
             _severityIcons.Dispose();
             _titleFont.Dispose();

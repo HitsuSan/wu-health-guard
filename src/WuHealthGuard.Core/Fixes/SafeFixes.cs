@@ -13,6 +13,14 @@ public static class UpdateServices
     public static readonly IReadOnlyList<string> Names = ["wuauserv", "bits", "cryptsvc"];
 
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
+
+    public static string DisplayName(string service) => service switch
+    {
+        "wuauserv" => "the Windows Update service",
+        "bits" => "the Background Intelligent Transfer Service",
+        "cryptsvc" => "the Cryptographic service",
+        _ => service,
+    };
 }
 
 /// <summary>Pauses Windows Update so it can't download and stage more work on top of a broken servicing state.</summary>
@@ -39,6 +47,8 @@ public sealed class PauseUpdatesFix(IUpdatePauseController pause, TimeProvider t
 
     public Task<FixResult> ApplyAsync(FixContext context, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        context.Report("Pausing Windows Update");
         var until = time.GetUtcNow().AddDays(Days);
         pause.Pause(until);
         return Task.FromResult(new FixResult(true, $"Windows Update paused until {until.ToLocalTime():d}."));
@@ -66,6 +76,7 @@ public sealed class TurnOffFastStartupFix(IRegistryReader reader, IRegistryWrite
     public Task<FixResult> ApplyAsync(FixContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        context.Report("Turning off Fast Startup");
         context.Log.Write(ActionLogLevel.Info, $"Setting {RegistryPaths.SessionManagerPower}\\{RegistryPaths.HiberbootEnabled} = 0 (was 1).", Id);
         writer.SetDword(RegistryPaths.SessionManagerPower, RegistryPaths.HiberbootEnabled, 0);
         return Task.FromResult(new FixResult(true, "Fast Startup is off. Shut down now fully shuts Windows down."));
@@ -89,18 +100,23 @@ public sealed class RestartUpdateServicesFix(IServiceControl services) : IFix
     public async Task<FixResult> ApplyAsync(FixContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        var steps = UpdateServices.Names.Count * 2;
+        var step = 0;
         foreach (var name in UpdateServices.Names)
         {
+            context.ReportStep($"Stopping {UpdateServices.DisplayName(name)}", step++, steps);
             context.Log.Write(ActionLogLevel.Info, $"Stopping {name}.", Id);
             await services.StopAsync(name, UpdateServices.Timeout, cancellationToken).ConfigureAwait(false);
         }
 
         foreach (var name in UpdateServices.Names.Reverse())
         {
+            context.ReportStep($"Starting {UpdateServices.DisplayName(name)}", step++, steps);
             context.Log.Write(ActionLogLevel.Info, $"Starting {name}.", Id);
             await services.StartAsync(name, UpdateServices.Timeout, cancellationToken).ConfigureAwait(false);
         }
 
+        context.Report("Done", 100);
         return new FixResult(true, "Windows Update services restarted.");
     }
 }
@@ -143,9 +159,12 @@ public sealed class ResetUpdateCacheFix(IServiceControl services, IFileOperation
     {
         ArgumentNullException.ThrowIfNull(context);
         var renamed = new List<string>();
+        var steps = (UpdateServices.Names.Count * 2) + 2;
+        var step = 0;
 
         foreach (var name in UpdateServices.Names)
         {
+            context.ReportStep($"Stopping {UpdateServices.DisplayName(name)}", step++, steps);
             context.Log.Write(ActionLogLevel.Info, $"Stopping {name}.", Id);
             await services.StopAsync(name, UpdateServices.Timeout, cancellationToken).ConfigureAwait(false);
         }
@@ -154,6 +173,7 @@ public sealed class ResetUpdateCacheFix(IServiceControl services, IFileOperation
         {
             foreach (var folder in Folders.Where(files.Exists))
             {
+                context.ReportStep($"Setting aside {Path.GetFileName(folder.Replace('\\', '/'))}", step++, steps);
                 var target = $"{folder}.wuhg-{context.Stamp}";
                 files.Move(folder, target);
                 renamed.Add(target);
@@ -165,6 +185,7 @@ public sealed class ResetUpdateCacheFix(IServiceControl services, IFileOperation
             // Always bring the services back, even if a rename failed.
             foreach (var name in UpdateServices.Names.Reverse())
             {
+                context.ReportStep($"Starting {UpdateServices.DisplayName(name)}", Math.Min(step++, steps - 1), steps);
                 context.Log.Write(ActionLogLevel.Info, $"Starting {name}.", Id);
                 await services.StartAsync(name, UpdateServices.Timeout, CancellationToken.None).ConfigureAwait(false);
             }
@@ -203,13 +224,28 @@ public abstract class CommandFix(IProcessRunner runner) : IFix
     /// <summary>A plain-language explanation of a failure, or null to report just the exit code.</summary>
     protected virtual string? ExplainFailure(ProcessResult result) => null;
 
+    /// <summary>Shown next to the percentage while the command runs.</summary>
+    protected virtual string ProgressStep => Title;
+
     public async Task<FixResult> ApplyAsync(FixContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
         var args = Arguments(context.Finding);
         context.Log.Write(ActionLogLevel.Info, $"Running {FileName} {string.Join(' ', args)}", Id);
+        context.Report(ProgressStep);
 
-        var result = await runner.RunAsync(FileName, args, Timeout, cancellationToken).ConfigureAwait(false);
+        // DISM and SFC print their progress ("[===   42.5%   ]", "Verification 42% complete."): pass it on.
+        var lastPercent = -1;
+        void OnLine(string line)
+        {
+            if (ProgressText.LastPercent(line) is { } percent && percent != lastPercent)
+            {
+                lastPercent = percent;
+                context.Report(ProgressStep, percent);
+            }
+        }
+
+        var result = await runner.RunAsync(FileName, args, Timeout, OnLine, cancellationToken).ConfigureAwait(false);
         if (SuccessCodes.TryGetValue(result.ExitCode, out var restart))
         {
             return new FixResult(true, $"{Title} finished.{(restart ? " Restart required." : "")}\n{result.Tail()}", restart);
@@ -229,6 +265,8 @@ public sealed class SfcScanNowFix(IProcessRunner runner) : CommandFix(runner)
 
     public override string Title => "Check system files (SFC)";
 
+    protected override string ProgressStep => "Checking system files";
+
     public override string Description =>
         "Runs sfc /scannow, which verifies protected system files and repairs them from the component store. " +
         "Run the DISM repair first if the component store is damaged.";
@@ -236,4 +274,32 @@ public sealed class SfcScanNowFix(IProcessRunner runner) : CommandFix(runner)
     protected override string FileName => "sfc.exe";
 
     protected override IReadOnlyList<string> Arguments(Finding? finding) => ["/scannow"];
+}
+
+/// <summary>Reads a percentage out of a line of tool output.</summary>
+public static partial class ProgressText
+{
+    /// <summary>The last "NN%" or "NN.N%" in the line, as a whole percent (0–100), or null if there is none.</summary>
+    public static int? LastPercent(string line)
+    {
+        if (string.IsNullOrEmpty(line))
+        {
+            return null;
+        }
+
+        var matches = PercentRegex().Matches(line);
+        if (matches.Count == 0)
+        {
+            return null;
+        }
+
+        var number = matches[^1].Groups[1].Value.Replace(',', '.');
+        return double.TryParse(number, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            && value is >= 0 and <= 100
+            ? (int)value
+            : null;
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(\d{1,3}(?:[.,]\d+)?)\s?%", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex PercentRegex();
 }

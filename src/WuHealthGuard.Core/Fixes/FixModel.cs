@@ -40,11 +40,25 @@ public abstract record BackupItem
 
 public sealed record FixResult(bool Success, string Message, bool RestartRequired = false);
 
+/// <summary>A step of a running fix, for the progress display.</summary>
+/// <param name="Step">What's happening now, e.g. "Creating a restore point".</param>
+/// <param name="Percent">Percent done when known (0–100); null shows a moving bar.</param>
+public sealed record FixProgress(string Step, int? Percent = null);
+
 /// <summary>What a fix gets when it runs.</summary>
 /// <param name="Finding">The finding the user chose to fix, if the fix was started from one.</param>
 /// <param name="Log">Action log; fixes write each step here.</param>
 /// <param name="Stamp">Run timestamp (<c>yyyyMMdd-HHmmss</c>) for naming renamed files and folders.</param>
-public sealed record FixContext(Finding? Finding, IActionLog Log, string Stamp);
+public sealed record FixContext(Finding? Finding, IActionLog Log, string Stamp)
+{
+    public IProgress<FixProgress>? Progress { get; init; }
+
+    public void Report(string step, int? percent = null) => Progress?.Report(new FixProgress(step, percent));
+
+    /// <summary>Step <paramref name="index"/> (0-based) of <paramref name="count"/>, as a percentage.</summary>
+    public void ReportStep(string step, int index, int count) =>
+        Report(step, count <= 0 ? null : Math.Clamp(100 * index / count, 0, 100));
+}
 
 public interface IFix
 {

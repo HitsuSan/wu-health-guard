@@ -28,6 +28,8 @@ public sealed class DismRestoreHealthFix(IProcessRunner runner) : CommandFix(run
 
     public override string Title => "Repair component store (DISM)";
 
+    protected override string ProgressStep => "Repairing the component store (usually 10–30 minutes)";
+
     public override string Description =>
         "Runs DISM /Online /Cleanup-Image /RestoreHealth, which replaces damaged component store (WinSxS) files with " +
         "good copies from Windows Update. Takes 10 to 30 minutes; the PC stays usable. If DISM can't find a repair " +
@@ -104,6 +106,7 @@ public sealed class ClearStaleRebootFlagsFix(IRegistryWriter registry) : IFix
     {
         ArgumentNullException.ThrowIfNull(context);
         var path = context.Finding!.Data[FindingDataKeys.RegistryPath];
+        context.Report("Deleting the restart flag");
         context.Log.Write(ActionLogLevel.Info, $"Deleting {path}.", Id);
         registry.DeleteKeyTree(path);
         return Task.FromResult(new FixResult(true, $"Deleted {path}."));
@@ -119,6 +122,8 @@ public sealed partial class RemoveStuckPackageFix(IProcessRunner runner) : Comma
     public override string Id => FixIds.RemoveStuckPackage;
 
     public override string Title => "Remove stuck update package";
+
+    protected override string ProgressStep => "Removing the package";
 
     public override string Description =>
         "Runs DISM /Online /Remove-Package for the stuck package. Windows Update will offer the update again later. " +

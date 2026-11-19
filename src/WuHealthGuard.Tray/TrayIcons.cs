@@ -7,20 +7,40 @@ namespace WuHealthGuard.Tray;
 internal static class TrayIcons
 {
     private static readonly Dictionary<RestartVerdict, Icon> Cache = [];
+    private static readonly Dictionary<(int Argb, int Frame), Icon> WorkingCache = [];
     private static Icon? _unknown;
+
+    /// <summary>Frames of the "working" animation.</summary>
+    public const int WorkingFrames = 3;
+
+    /// <summary>
+    /// The shield with three dots, one of them bright: cycling <paramref name="frame"/> animates it, so the tray
+    /// shows the app is busy even with the window closed.
+    /// </summary>
+    public static Icon Working(Color color, int frame)
+    {
+        frame %= WorkingFrames;
+        if (!WorkingCache.TryGetValue((color.ToArgb(), frame), out var icon))
+        {
+            icon = Draw(color, frame);
+            WorkingCache[(color.ToArgb(), frame)] = icon;
+        }
+
+        return icon;
+    }
 
     public static Icon For(RestartVerdict verdict)
     {
         if (!Cache.TryGetValue(verdict, out var icon))
         {
-            icon = Draw(Color(verdict));
+            icon = Draw(Color(verdict), workingFrame: null);
             Cache[verdict] = icon;
         }
 
         return icon;
     }
 
-    public static Icon Unknown => _unknown ??= Draw(System.Drawing.Color.Gray);
+    public static Icon Unknown => _unknown ??= Draw(System.Drawing.Color.Gray, workingFrame: null);
 
     /// <summary>Three lights: green (safe, including "updates will finish during the restart"), yellow, red.</summary>
     public static Color Color(RestartVerdict verdict) => verdict switch
@@ -31,7 +51,7 @@ internal static class TrayIcons
         _ => System.Drawing.Color.Gray,
     };
 
-    private static Icon Draw(Color color)
+    private static Icon Draw(Color color, int? workingFrame)
     {
         const int Size = 32;
         using var bitmap = new Bitmap(Size, Size);
@@ -51,6 +71,15 @@ internal static class TrayIcons
             using var outline = new Pen(System.Drawing.Color.White, 2f);
             g.FillPath(fill, path);
             g.DrawPath(outline, path);
+
+            if (workingFrame is { } frame)
+            {
+                for (var i = 0; i < WorkingFrames; i++)
+                {
+                    using var dot = new SolidBrush(System.Drawing.Color.FromArgb(i == frame ? 255 : 110, System.Drawing.Color.White));
+                    g.FillEllipse(dot, 8.5f + (i * 6f), 13f, 4.5f, 4.5f);
+                }
+            }
         }
 
         return Icon.FromHandle(bitmap.GetHicon());

@@ -1,4 +1,5 @@
 using WuHealthGuard.Core.Abstractions;
+using WuHealthGuard.Core.Repair;
 using WuHealthGuard.Core.Updates;
 using WuHealthGuard.Windows;
 
@@ -25,6 +26,8 @@ internal static class Program
                 return GenerateUpdateKey();
             case var c when string.Equals(c, DismComponentStoreProbe.HelperSwitch, StringComparison.OrdinalIgnoreCase):
                 return RunComponentStoreHelper(args.Skip(1).Any(a => string.Equals(a, DismComponentStoreProbe.DeepSwitch, StringComparison.OrdinalIgnoreCase)));
+            case var c when string.Equals(c, InstallMediaReader.HelperSwitch, StringComparison.OrdinalIgnoreCase):
+                return RunImageInfoHelper(args.ElementAtOrDefault(1));
             case var c when string.Equals(c, SelfUpdater.AfterUpdateSwitch, StringComparison.OrdinalIgnoreCase):
                 updatedFrom = args.ElementAtOrDefault(1) ?? "?";
                 break;
@@ -94,6 +97,27 @@ internal static class Program
         }
 
         output.WriteLine(ComponentStoreProtocol.Result(health));
+        return 0;
+    }
+
+    /// <summary>
+    /// Helper mode: lists the images in installation media's install.wim/esd with DISM and reports one line over
+    /// stdout (see <see cref="InstallImageProtocol"/>). Out of process, like the component store check.
+    /// </summary>
+    private static int RunImageInfoHelper(string? imageFile)
+    {
+        using var output = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = true };
+        try
+        {
+            output.WriteLine(string.IsNullOrWhiteSpace(imageFile)
+                ? InstallImageProtocol.Error("No image file given.")
+                : InstallImageProtocol.Images(DismImageReader.Read(imageFile)));
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine(InstallImageProtocol.Error($"DISM couldn't read the image list: {ex.Message}"));
+        }
+
         return 0;
     }
 

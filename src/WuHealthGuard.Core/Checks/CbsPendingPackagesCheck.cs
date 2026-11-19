@@ -133,7 +133,7 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
             "repair. If DISM can't find a repair source, an in-place repair install is the fix. Don't delete or rename " +
             "pending.xml: that gets Windows booting but leaves these packages stuck halfway.")
         {
-            SuggestedFixIds = [FixIds.PauseUpdates, FixIds.DismRestoreHealth, FixIds.RemoveStuckPackage],
+            SuggestedFixIds = [FixIds.PauseUpdates, FixIds.DismRestoreHealth, FixIds.RemoveStuckPackage, FixIds.InPlaceRepair],
             Data = data,
             Items = CbsPackages.Names(stuck),
         };

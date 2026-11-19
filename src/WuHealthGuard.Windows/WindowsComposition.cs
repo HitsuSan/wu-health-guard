@@ -2,6 +2,8 @@ using WuHealthGuard.Core;
 using WuHealthGuard.Core.Checks;
 using WuHealthGuard.Core.Fixes;
 using WuHealthGuard.Core.Guard;
+using WuHealthGuard.Core.Repair;
+using WuHealthGuard.Core.Abstractions;
 
 namespace WuHealthGuard.Windows;
 
@@ -54,8 +56,19 @@ public sealed class WindowsComposition : IDisposable
 
     public HealthScanner Scanner { get; }
 
+    /// <summary>This PC's version, edition, language and architecture, for the in-place repair.</summary>
+    public WindowsIdentity Identity() => RepairSystemInfo.Identity(Registry);
+
+    /// <summary>Opens installation media; DISM reads its image list in the helper process.</summary>
+    public InstallMediaReader CreateMediaReader() => new(Processes, HelperExe);
+
+    public SetupScanner CreateSetupScanner() => new(Processes);
+
+    private static string HelperExe => Environment.ProcessPath ?? throw new InvalidOperationException("Can't determine the executable path.");
+
     /// <param name="pauseDays">Read each time the pause fix runs, so it follows the current settings.</param>
-    public FixRunner CreateFixRunner(IConfirmationPrompt prompt, Func<int> pauseDays, bool requireRestorePoint = true) => new(
+    /// <param name="restartGuard">The app's restart warning, which stands down while an in-place repair runs.</param>
+    public FixRunner CreateFixRunner(IConfirmationPrompt prompt, Func<int> pauseDays, IRestartGuard restartGuard, bool requireRestorePoint = true) => new(
         [
             // Safe: one click.
             new PauseUpdatesFix(PauseController, Time, pauseDays),
@@ -68,6 +81,7 @@ public sealed class WindowsComposition : IDisposable
             new DismRestoreHealthFix(Processes),
             new ClearStaleRebootFlagsFix(Registry),
             new RemoveStuckPackageFix(Processes),
+            new InPlaceRepairFix(Processes, restartGuard),
         ],
         prompt,
         new WindowsBackupService(Processes) { RequireRestorePoint = requireRestorePoint },

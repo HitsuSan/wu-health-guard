@@ -46,7 +46,7 @@ public sealed class ComponentStoreCheck(IComponentStoreProbe probe) : IHealthChe
                     "Repair it with DISM /RestoreHealth before installing more updates. If DISM can't find a repair " +
                     "source (0x800F081F, 0x800F0915), an in-place repair install is the fix." + suffix)
                 {
-                    SuggestedFixIds = [FixIds.DismRestoreHealth, FixIds.SfcScanNow, FixIds.PauseUpdates],
+                    SuggestedFixIds = [FixIds.DismRestoreHealth, FixIds.SfcScanNow, FixIds.InPlaceRepair, FixIds.PauseUpdates],
                 },
             ],
             ComponentStoreState.NotRepairable =>
@@ -58,10 +58,10 @@ public sealed class ComponentStoreCheck(IComponentStoreProbe probe) : IHealthChe
                     RestartImpact.Block,
                     "Component store is damaged and can't be repaired online",
                     "DISM reports the component store can't be repaired in place. The fix is an in-place repair install " +
-                    "(run setup.exe from a Windows ISO of the same version and keep files and apps). Until then, pause " +
+                    "(Windows Setup over the current Windows, keeping files and apps; \"In-place repair install\" below finds the right ISO). Until then, pause " +
                     "updates and back up your data." + suffix)
                 {
-                    SuggestedFixIds = [FixIds.PauseUpdates],
+                    SuggestedFixIds = [FixIds.InPlaceRepair, FixIds.PauseUpdates],
                 },
             ],
             _ =>

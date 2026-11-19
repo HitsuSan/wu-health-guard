@@ -71,7 +71,7 @@ public sealed class PendingXmlCheck(IFileSystem files, IRegistryReader registry,
                     "in-place repair install. Don't delete or rename pending.xml: that gets Windows to boot but leaves the " +
                     "packages stuck halfway.")
                 {
-                    SuggestedFixIds = [FixIds.PauseUpdates],
+                    SuggestedFixIds = [FixIds.PauseUpdates, FixIds.InPlaceRepair],
                     Data = data,
                 });
             }
@@ -115,7 +115,7 @@ public sealed class PendingXmlCheck(IFileSystem files, IRegistryReader registry,
                     "What to do: keep Windows Update paused. The repair is System Restore to before the update, or an " +
                     "in-place repair install.")
                 {
-                    SuggestedFixIds = [FixIds.PauseUpdates],
+                    SuggestedFixIds = [FixIds.PauseUpdates, FixIds.InPlaceRepair],
                     Items = CbsPackages.Names(settled),
                     Data = new Dictionary<string, string>
                     {

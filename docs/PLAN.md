@@ -103,6 +103,8 @@ Shut down doesn't change it, which is correct: only a real restart processes pen
    WU state change, proper icon assets.
 4. **VM validation** — §5.
 5. **Packaging** — single-file publish, signing, screenshots.
+6. **In-place repair helper** — 🟡 core tested, Windows parts and window written and compiling; not yet run
+   on Windows. See [IN-PLACE-REPAIR.md](IN-PLACE-REPAIR.md).
 
 ## 5. Validation on real Windows
 

@@ -45,6 +45,8 @@ internal sealed class ReportForm : Form
     private readonly Func<bool, Task<ScanOutcome>> _rescan;
     private readonly ActivityCenter _activities;
     private readonly Func<PauseStatus> _pauseStatus;
+    /// <summary>Opens the in-place repair window (it walks through choosing and checking media before anything runs).</summary>
+    private readonly Action<Finding?> _openRepair;
 
     private readonly TableLayoutPanel _header = new() { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2 };
     private readonly Label _headline = new() { Dock = DockStyle.Fill, AutoSize = true, ForeColor = Color.White, TextAlign = ContentAlignment.MiddleLeft };
@@ -96,9 +98,10 @@ internal sealed class ReportForm : Form
     private bool _showItems;
     private bool _splitPlaced;
 
-    public ReportForm(FixRunner fixes, Func<bool, Task<ScanOutcome>> rescan, Func<PauseStatus> pauseStatus, ActivityCenter activities)
+    public ReportForm(FixRunner fixes, Func<bool, Task<ScanOutcome>> rescan, Func<PauseStatus> pauseStatus, ActivityCenter activities, Action<Finding?> openRepair)
     {
         _fixes = fixes;
+        _openRepair = openRepair;
         _rescan = rescan;
         _activities = activities;
         _pauseStatus = pauseStatus;
@@ -541,6 +544,15 @@ internal sealed class ReportForm : Form
             Margin = new Padding(0, 0, LogicalToDeviceUnits(8), LogicalToDeviceUnits(6)),
             Tag = fix,
         };
+        if (fix.Id == FixIds.InPlaceRepair)
+        {
+            // Not a one-click fix: the repair window finds and checks the media first.
+            _tips.SetToolTip(button, "Opens the in-place repair helper: which route fits this PC, which ISO it needs, and a check of " +
+                "the ISO by the app and by Windows Setup. Nothing changes until you start the repair there.\n\n" + fix.Description);
+            button.Click += (_, _) => _openRepair(finding);
+            return button;
+        }
+
         _tips.SetToolTip(button, (fix.Risk == FixRisk.Risky ? "Asks for confirmation and makes a backup first.\n\n" : "") + fix.Description);
         button.Click += async (_, _) => await RunFixAsync(fix, finding);
         return button;
@@ -694,7 +706,19 @@ internal sealed class ReportForm : Form
         var icon = result.Status == FixRunStatus.Succeeded ? MessageBoxIcon.Information : MessageBoxIcon.Warning;
         var message = result.Message + (result.BackupDirectory is null ? "" : $"\n\nBackup: {result.BackupDirectory}") +
             (result.RestartRequired ? "\n\nA restart is needed to finish." : "");
-        MessageBox.Show(this, message, $"{fix.Title}: {result.Status}", MessageBoxButtons.OK, icon);
+        if (result.Status == FixRunStatus.Failed && result.Message.Contains(DismErrors.InPlaceRepair, StringComparison.Ordinal))
+        {
+            if (MessageBox.Show(this, message + "\n\nOpen the in-place repair helper now?", $"{fix.Title}: {result.Status}",
+                    MessageBoxButtons.YesNo, icon) == DialogResult.Yes)
+            {
+                _openRepair(finding);
+            }
+        }
+        else
+        {
+            MessageBox.Show(this, message, $"{fix.Title}: {result.Status}", MessageBoxButtons.OK, icon);
+        }
+
         await _rescan(false);
     }
 

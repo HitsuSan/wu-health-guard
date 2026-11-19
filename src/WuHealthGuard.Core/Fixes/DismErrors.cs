@@ -23,7 +23,8 @@ public static class DismErrors
     public const int PermanentPackage = unchecked((int)0x800F0825);
 
     public const string InPlaceRepair =
-        "An in-place repair install is the fix: run setup.exe from a Windows ISO of the same version and keep files and apps.";
+        "An in-place repair install is the fix: Windows Setup from an ISO with the same edition and language and the same or " +
+        "a newer version, keeping files and apps. \"In-place repair install\" in the report finds the right ISO and checks it.";
 
     /// <summary>A plain-language explanation of a DISM failure, or null if it isn't one we know.</summary>
     public static string? Explain(ProcessResult result)

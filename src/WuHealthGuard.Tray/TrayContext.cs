@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Win32;
+using WuHealthGuard.Core.Abstractions;
 using WuHealthGuard.Core.Fixes;
 using WuHealthGuard.Core.Guard;
 using WuHealthGuard.Core.Model;
@@ -8,7 +9,7 @@ using WuHealthGuard.Windows;
 
 namespace WuHealthGuard.Tray;
 
-internal sealed class TrayContext : ApplicationContext
+internal sealed class TrayContext : ApplicationContext, IRestartGuard
 {
     private const int MaxTooltip = 127;
     private static readonly TimeSpan FirstUpdateCheck = TimeSpan.FromMinutes(2);
@@ -30,6 +31,9 @@ internal sealed class TrayContext : ApplicationContext
     private readonly FixRunner _fixes;
     /// <summary>Created the first time it's opened, so a problem in the window can't stop the tray icon.</summary>
     private ReportForm? _form;
+    private RepairForm? _repairForm;
+    /// <summary>An in-place repair the app started is running: Setup restarts the PC itself, so the warning stands down.</summary>
+    private bool _repairInProgress;
     private AppSettings _settings = AppSettings.Load();
     private HealthReport? _last;
     private readonly SemaphoreSlim _scanGate = new(1, 1);
@@ -56,8 +60,9 @@ internal sealed class TrayContext : ApplicationContext
         _updates = new UpdateClient(_http, AppInfo.Version, AppInfo.UpdateFeedUrl, AppInfo.UpdatePublicKey);
 
         _fixes = _app.CreateFixRunner(
-            new WinFormsConfirmationPrompt(() => _form is { Visible: true } form ? form : null),
+            new WinFormsConfirmationPrompt(() => _repairForm is { Visible: true } repair ? repair : _form is { Visible: true } form ? form : null),
             () => _settings.Guard.PauseDays,
+            this,
             _settings.RequireRestorePoint);
 
         _autoPauseItem.Checked = _settings.Guard.AutoPauseEnabled;
@@ -415,11 +420,59 @@ internal sealed class TrayContext : ApplicationContext
 
     private void ApplyShutdownGuard()
     {
-        var block = _settings.ShutdownGuard && _last?.Verdict == RestartVerdict.DoNotRestart;
+        var block = _settings.ShutdownGuard && !_repairInProgress && _last?.Verdict == RestartVerdict.DoNotRestart;
         var reason = block ? $"WU Health Guard: {_last!.Ordered.First().Title}" : null;
         if (_guard.BlockReason != reason)
         {
             _guard.BlockReason = reason;
+        }
+    }
+
+    /// <summary>Called by the in-place repair fix, possibly off the UI thread; the block reason must be set on the window's thread.</summary>
+    public void SetRepairInProgress(bool inProgress)
+    {
+        void Apply()
+        {
+            _repairInProgress = inProgress;
+            _app.Log.Write(ActionLogLevel.Info, inProgress
+                ? "Restart warning off while Windows Setup runs the in-place repair."
+                : "Restart warning back on: Windows Setup stopped without restarting.");
+            ApplyShutdownGuard();
+        }
+
+        if (_guard.InvokeRequired)
+        {
+            _guard.Invoke(Apply);
+        }
+        else
+        {
+            Apply();
+        }
+    }
+
+    private void ShowRepair(Finding? finding)
+    {
+        try
+        {
+            if (_repairForm is { IsDisposed: false } open)
+            {
+                open.WindowState = FormWindowState.Normal;
+                open.Activate();
+                return;
+            }
+
+            _repairForm = new RepairForm(_app, _fixes, _activities, () => _last, finding, _app.PauseController.GetStatus().IsPaused);
+            _repairForm.FormClosed += (_, _) => _repairForm = null; // A closed modeless form disposes itself.
+            _repairForm.Show();
+        }
+        catch (Exception ex)
+        {
+            _repairForm?.Dispose();
+            _repairForm = null;
+            var log = CrashReport.Write(ex, "Opening the in-place repair window");
+            _app.Log.Write(ActionLogLevel.Error, $"Opening the in-place repair window failed: {ex.Message}");
+            MessageBox.Show($"The in-place repair window couldn't open: {ex.Message}\n\nDetails: {log}", "WU Health Guard",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
@@ -471,7 +524,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         try
         {
-            var form = _form ??= new ReportForm(_fixes, deep => ScanAsync(deep), _app.PauseController.GetStatus, _activities);
+            var form = _form ??= new ReportForm(_fixes, deep => ScanAsync(deep), _app.PauseController.GetStatus, _activities, ShowRepair);
             if (_last is not null)
             {
                 form.ShowReport(_last);
@@ -546,6 +599,7 @@ internal sealed class TrayContext : ApplicationContext
             _icon.Dispose();
             _menu.Dispose();
             _form?.Dispose();
+            _repairForm?.Dispose();
             _guard.Dispose();
             _app.Dispose();
         }

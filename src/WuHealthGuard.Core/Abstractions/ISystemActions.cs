@@ -31,6 +31,16 @@ public interface IFileOperations
     void Move(string source, string destination);
 }
 
+/// <summary>The app's own restart warning (it holds restarts while the light is red).</summary>
+public interface IRestartGuard
+{
+    /// <summary>
+    /// True while an in-place repair the app started is running: Windows Setup restarts the PC itself and the
+    /// warning must not hold it. False again if Setup stops without restarting.
+    /// </summary>
+    void SetRepairInProgress(bool inProgress);
+}
+
 public interface IRegistryWriter
 {
     /// <summary>Deletes a key and its subtree. No-op if it doesn't exist.</summary>

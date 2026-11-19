@@ -66,9 +66,10 @@ public sealed class PendingXmlCheck(IFileSystem files, IRegistryReader registry,
                     "Stale pending.xml: boot-time update work didn't finish",
                     $"{path} was last written {BootTime.Format(pending.LastWriteTime)}, before the last restart " +
                     $"({BootTime.Format(lastBoot)}). Windows should have processed and removed it during that restart. " +
-                    "Restarting again may hang at \"Working on updates\" or boot-loop.\n" +
-                    "Don't delete or rename it: that gets Windows to boot but leaves the packages stuck halfway. " +
-                    "Pause updates and plan a repair: System Restore to before the update, or an in-place repair install.")
+                    "Restarting again may hang at \"Working on updates\" or boot-loop.\n\n" +
+                    "What to do: keep Windows Update paused and plan a repair: System Restore to before the update, or an " +
+                    "in-place repair install. Don't delete or rename pending.xml: that gets Windows to boot but leaves the " +
+                    "packages stuck halfway.")
                 {
                     SuggestedFixIds = [FixIds.PauseUpdates],
                     Data = data,
@@ -105,15 +106,17 @@ public sealed class PendingXmlCheck(IFileSystem files, IRegistryReader registry,
                     Severity.Critical,
                     RestartImpact.Block,
                     "Packages are pending but pending.xml is missing",
-                    $"{settled.Count} package(s) are still Install Pending or Uninstall Pending, but {path} doesn't exist, " +
-                    "so the next restart has no instructions to finish or roll them back:\n" +
-                    CbsPackages.List(settled, now, max: 8) +
-                    (leftovers.Count > 0 ? $"\nLeftover files in WinSxS: {string.Join(", ", leftovers)}." : "") +
-                    "\nThis usually happens after pending.xml was renamed or deleted to escape a boot loop. A normal restart " +
-                    "can boot-loop again. Pause updates. The repair is System Restore to before the update or an " +
+                    $"{CbsPackages.Count(settled.Count, "package")} are still Install Pending or Uninstall Pending, but " +
+                    "pending.xml doesn't exist, so the next restart has no instructions to finish or roll them back:\n" +
+                    CbsPackages.Summarize(settled, now) + "\n\n" +
+                    (leftovers.Count > 0 ? $"Leftover files in WinSxS: {string.Join(", ", leftovers)}.\n\n" : "") +
+                    "This usually happens after pending.xml was renamed or deleted to escape a boot loop. A normal restart " +
+                    "can boot-loop again.\n\n" +
+                    "What to do: keep Windows Update paused. The repair is System Restore to before the update, or an " +
                     "in-place repair install.")
                 {
                     SuggestedFixIds = [FixIds.PauseUpdates],
+                    Items = CbsPackages.Names(settled),
                     Data = new Dictionary<string, string>
                     {
                         [FindingDataKeys.FilePath] = path,

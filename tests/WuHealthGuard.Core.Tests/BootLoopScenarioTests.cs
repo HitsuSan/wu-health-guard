@@ -183,8 +183,8 @@ public class BootLoopScenarioTests
         Assert.Equal(RestartVerdict.DoNotRestart, report.Verdict);
         var stuck = report.Findings.Where(f => f.Code == CbsPendingPackagesCheck.StuckCode).ToList();
         Assert.Equal(2, stuck.Count);
-        Assert.All(stuck, f => Assert.DoesNotContain(NextRollup, f.Detail, StringComparison.Ordinal)); // The new one is fine...
-        Assert.Contains(report.Findings, f => f.Code == CbsPendingPackagesCheck.PendingCode && f.Detail.Contains(NextRollup, StringComparison.Ordinal));
+        Assert.All(stuck, f => Assert.DoesNotContain(f.Items, i => i.StartsWith(NextRollup, StringComparison.Ordinal))); // The new one is fine...
+        Assert.Contains(report.Findings, f => f.Code == CbsPendingPackagesCheck.PendingCode && f.Items.Any(i => i.StartsWith(NextRollup, StringComparison.Ordinal)));
 
         // ...but the restart must be held, and auto-pause (when enabled) kicks in.
         var decision = GuardPolicy.Decide(report, null, new GuardSettings { AutoPauseEnabled = true }, PauseStatus.NotPaused, pc.Now);

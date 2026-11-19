@@ -41,7 +41,25 @@ public class CbsPendingPackagesCheckTests
         Assert.Equal(CbsPendingPackagesCheck.PendingCode, f.Code);
         Assert.Equal(Severity.Info, f.Severity);
         Assert.Equal(RestartImpact.RestartNeeded, f.Impact);
-        Assert.Contains(Pkg, f.Detail, StringComparison.Ordinal);
+        Assert.Contains($"{Pkg} (Install Pending)", f.Items);
+        Assert.Contains("• Build 26100.2033.1.7: 1 package Install Pending", f.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Packages_are_summarized_per_build_with_all_names_in_items()
+    {
+        var reg = Packages(
+            ("A-Package~31bf3856ad364e35~amd64~~10.0.26100.3900", CbsPackageState.UninstallPending, T.BeforeBoot),
+            ("B-Package~31bf3856ad364e35~amd64~~10.0.26100.3900", CbsPackageState.UninstallPending, T.BeforeBoot),
+            ("C-Package~31bf3856ad364e35~amd64~en-US~10.0.26100.3100", CbsPackageState.UninstallPending, T.BeforeBoot));
+
+        var f = Assert.Single(await Run(reg));
+
+        Assert.Contains("• Build 10.0.26100.3900: 2 packages Uninstall Pending", f.Detail, StringComparison.Ordinal);
+        Assert.Contains("• Build 10.0.26100.3100: 1 package Uninstall Pending", f.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("A-Package", f.Detail, StringComparison.Ordinal);
+        Assert.Equal(3, f.Items.Count);
+        Assert.Contains("What to do:", f.Detail, StringComparison.Ordinal);
     }
 
     [Theory]

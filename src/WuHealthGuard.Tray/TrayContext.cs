@@ -380,7 +380,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         try
         {
-            var form = _form ??= new ReportForm(_fixes, ScanAsync);
+            var form = _form ??= new ReportForm(_fixes, ScanAsync, _app.PauseController.GetStatus);
             if (_last is not null)
             {
                 form.ShowReport(_last);

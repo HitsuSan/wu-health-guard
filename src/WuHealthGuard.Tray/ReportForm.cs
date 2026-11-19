@@ -1,5 +1,9 @@
+using System.Drawing.Drawing2D;
+using System.Globalization;
+using System.Text;
 using WuHealthGuard.Core.Checks;
 using WuHealthGuard.Core.Fixes;
+using WuHealthGuard.Core.Guard;
 using WuHealthGuard.Core.Model;
 
 namespace WuHealthGuard.Tray;
@@ -8,20 +12,43 @@ namespace WuHealthGuard.Tray;
 /// <remarks>
 /// Layout is built in code and sized for the display's DPI: fixed pixel sizes go through
 /// <see cref="Control.LogicalToDeviceUnits(int)"/>, and the split and columns are proportional to the window.
+/// Nothing here may set size constraints before the window has its real size (see <see cref="PlaceSplitter"/>).
 /// </remarks>
 internal sealed class ReportForm : Form
 {
     /// <summary>Share of the body width given to the findings list.</summary>
-    private const double ListShare = 0.42;
+    private const double ListShare = 0.40;
+
+    private const string WhatToDo = "What to do:";
 
     private static readonly Color CriticalText = Color.FromArgb(0xB3, 0x1D, 0x28);
     private static readonly Color WarningText = Color.FromArgb(0x9A, 0x5B, 0x00);
-    private static readonly Color InfoText = SystemColors.GrayText;
+    private static readonly Color InfoText = Color.FromArgb(0x5F, 0x63, 0x68);
+
+    /// <summary>Friendly labels for evidence keys; keys not listed are shown as they are.</summary>
+    private static readonly Dictionary<string, string> EvidenceLabels = new(StringComparer.Ordinal)
+    {
+        [FindingDataKeys.Count] = "Count",
+        [FindingDataKeys.Since] = "Since",
+        [FindingDataKeys.Age] = "For",
+        [FindingDataKeys.PackageName] = "Package",
+        [FindingDataKeys.RegistryPath] = "Registry key",
+        [FindingDataKeys.FilePath] = "File",
+        [FindingDataKeys.LastWriteTime] = "Last changed",
+        [FindingDataKeys.HResult] = "Error code",
+        [FindingDataKeys.KbArticle] = "Update",
+        [FindingDataKeys.UpdateId] = "Update ID",
+    };
 
     private readonly FixRunner _fixes;
     private readonly Func<bool, Task> _rescan;
+    private readonly Func<PauseStatus> _pauseStatus;
+
+    private readonly TableLayoutPanel _header = new() { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, RowCount = 2 };
     private readonly Label _headline = new() { Dock = DockStyle.Fill, AutoSize = true, ForeColor = Color.White, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly Label _subline = new() { Dock = DockStyle.Fill, AutoSize = true, ForeColor = Color.White, TextAlign = ContentAlignment.MiddleLeft };
     private readonly SplitContainer _split = new() { Dock = DockStyle.Fill, FixedPanel = FixedPanel.None };
+    private readonly ImageList _severityIcons = new() { ColorDepth = ColorDepth.Depth32Bit };
     private readonly ListView _list = new()
     {
         Dock = DockStyle.Fill,
@@ -44,20 +71,31 @@ internal sealed class ReportForm : Form
         ScrollBars = RichTextBoxScrollBars.Vertical,
     };
 
+    private readonly FlowLayoutPanel _links = new() { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
+    private readonly LinkLabel _itemsLink = new() { AutoSize = true };
+    private readonly LinkLabel _copyLink = new() { AutoSize = true, Text = "Copy details" };
     private readonly Label _fixesHeader = new() { Text = "What you can do", AutoSize = true, Dock = DockStyle.Fill };
     private readonly FlowLayoutPanel _fixButtons = new() { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
     private readonly Label _status = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
     private readonly Button _rescanButton = new() { Text = "Check again", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Button _deepButton = new() { Text = "Full component store scan", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly ToolTip _tips = new();
+
+    private Font _titleFont = null!;
+    private Font _boldFont = null!;
+    private Font _smallFont = null!;
+    private Font _smallBoldFont = null!;
     private HealthReport? _report;
+    private Finding? _shown;
+    private bool _showItems;
     private bool _busy;
     private bool _splitPlaced;
 
-    public ReportForm(FixRunner fixes, Func<bool, Task> rescan)
+    public ReportForm(FixRunner fixes, Func<bool, Task> rescan, Func<PauseStatus> pauseStatus)
     {
         _fixes = fixes;
         _rescan = rescan;
+        _pauseStatus = pauseStatus;
 
         SuspendLayout();
         AutoScaleMode = AutoScaleMode.None; // Sizes below are scaled explicitly.
@@ -65,47 +103,83 @@ internal sealed class ReportForm : Form
         Text = $"WU Health Guard {AppInfo.Version}";
         Icon = TrayIcons.Unknown;
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(LogicalToDeviceUnits(1040), LogicalToDeviceUnits(660));
-        MinimumSize = new Size(LogicalToDeviceUnits(760), LogicalToDeviceUnits(480));
+        Size = new Size(LogicalToDeviceUnits(1080), LogicalToDeviceUnits(680));
+        MinimumSize = new Size(LogicalToDeviceUnits(780), LogicalToDeviceUnits(480));
 
+        _titleFont = new Font(Font.FontFamily, Font.SizeInPoints * 1.25f, FontStyle.Bold);
+        _boldFont = new Font(Font, FontStyle.Bold);
+        _smallFont = new Font(Font.FontFamily, Font.SizeInPoints * 0.92f);
+        _smallBoldFont = new Font(_smallFont, FontStyle.Bold);
+
+        // Header: verdict, then one line of context (counts, pause state, what to do).
         _headline.Font = new Font(Font.FontFamily, Font.SizeInPoints * 1.45f, FontStyle.Bold);
-        _headline.Padding = new Padding(LogicalToDeviceUnits(16), LogicalToDeviceUnits(10), LogicalToDeviceUnits(16), LogicalToDeviceUnits(10));
-        _fixesHeader.Font = new Font(Font, FontStyle.Bold);
-        _fixesHeader.Padding = new Padding(0, LogicalToDeviceUnits(10), 0, LogicalToDeviceUnits(4));
+        _headline.Padding = new Padding(LogicalToDeviceUnits(16), LogicalToDeviceUnits(10), LogicalToDeviceUnits(16), LogicalToDeviceUnits(2));
+        _subline.Padding = new Padding(LogicalToDeviceUnits(18), 0, LogicalToDeviceUnits(16), LogicalToDeviceUnits(10));
+        _header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _header.Controls.Add(_headline, 0, 0);
+        _header.Controls.Add(_subline, 0, 1);
+        _header.Margin = Padding.Empty;
 
-        // Findings list.
-        _list.Columns.Add("Severity", LogicalToDeviceUnits(84));
+        // Findings list with a colored dot per severity.
+        var dot = LogicalToDeviceUnits(16);
+        _severityIcons.ImageSize = new Size(dot, dot);
+        _severityIcons.Images.Add(nameof(Severity.Critical), Dot(dot, CriticalText));
+        _severityIcons.Images.Add(nameof(Severity.Warning), Dot(dot, Color.FromArgb(0xE0, 0xA1, 0x00)));
+        _severityIcons.Images.Add(nameof(Severity.Info), Dot(dot, Color.FromArgb(0x1F, 0x6F, 0xD1)));
+        _list.SmallImageList = _severityIcons;
+        _list.Columns.Add("Severity", LogicalToDeviceUnits(104));
         _list.Columns.Add("Finding", LogicalToDeviceUnits(300));
         _list.SelectedIndexChanged += (_, _) => ShowSelected();
         _list.ClientSizeChanged += (_, _) => FitColumns();
 
-        // Detail pane: text on top, fixes below.
+        // Detail pane: text, then links, then fixes.
+        _detail.BulletIndent = LogicalToDeviceUnits(10);
+        _itemsLink.LinkClicked += (_, _) =>
+        {
+            _showItems = !_showItems;
+            RenderShown();
+        };
+        _copyLink.LinkClicked += (_, _) => CopyDetails();
+        _itemsLink.Margin = new Padding(0, LogicalToDeviceUnits(6), LogicalToDeviceUnits(18), 0);
+        _copyLink.Margin = new Padding(0, LogicalToDeviceUnits(6), 0, 0);
+        _links.Controls.Add(_itemsLink);
+        _links.Controls.Add(_copyLink);
+
+        _fixesHeader.Font = _boldFont;
+        _fixesHeader.Padding = new Padding(0, LogicalToDeviceUnits(12), 0, LogicalToDeviceUnits(4));
+
         var detailLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 3,
-            Padding = new Padding(LogicalToDeviceUnits(14), LogicalToDeviceUnits(10), LogicalToDeviceUnits(14), LogicalToDeviceUnits(12)),
+            RowCount = 4,
+            Padding = new Padding(LogicalToDeviceUnits(16), LogicalToDeviceUnits(12), LogicalToDeviceUnits(16), LogicalToDeviceUnits(12)),
             BackColor = SystemColors.Window,
         };
         detailLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         detailLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         detailLayout.Controls.Add(_detail, 0, 0);
-        detailLayout.Controls.Add(_fixesHeader, 0, 1);
-        detailLayout.Controls.Add(_fixButtons, 0, 2);
+        detailLayout.Controls.Add(_links, 0, 1);
+        detailLayout.Controls.Add(_fixesHeader, 0, 2);
+        detailLayout.Controls.Add(_fixButtons, 0, 3);
 
         _split.Panel1.Controls.Add(_list);
         _split.Panel2.Controls.Add(detailLayout);
         // Minimum pane widths are applied in PlaceSplitter, once the window has its real size. Setting them
-        // here, while the SplitContainer is still at its 150 px default, throws and kills the app at startup.
+        // here, while the SplitContainer is still at its 150 px default, throws and kills the app.
         _split.SplitterWidth = LogicalToDeviceUnits(6);
 
         // Bottom bar.
         _rescanButton.Click += async (_, _) => await RunBusyAsync(() => _rescan(false), "Checking…");
         _deepButton.Click += async (_, _) => await RunBusyAsync(() => _rescan(true), "Scanning the component store; this can take several minutes…");
-        _tips.SetToolTip(_deepButton, "Runs DISM /ScanHealth. Read-only, but slow.");
+        _tips.SetToolTip(_deepButton,
+            "Runs DISM /ScanHealth: reads every file in the component store. Read-only, but takes several minutes.\n" +
+            "The regular check only reads the result of the last scan, so it can miss damage nobody has scanned for yet.");
         var bottom = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -125,7 +199,7 @@ internal sealed class ReportForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.Controls.Add(_headline, 0, 0);
+        root.Controls.Add(_header, 0, 0);
         root.Controls.Add(_split, 0, 1);
         root.Controls.Add(bottom, 0, 2);
         Controls.Add(root);
@@ -200,13 +274,15 @@ internal sealed class ReportForm : Form
         ArgumentNullException.ThrowIfNull(report);
         _report = report;
         var verdict = report.Verdict;
+        var color = TrayIcons.Color(verdict);
         _headline.Text = verdict.Headline();
-        _headline.BackColor = TrayIcons.Color(verdict);
+        _subline.Text = Summary(report);
+        _header.BackColor = _headline.BackColor = _subline.BackColor = color;
         Icon = TrayIcons.For(verdict);
-        _status.Text = $"Checked {report.Timestamp.ToLocalTime():g}  ·  Last restart {BootTime.Format(report.LastBootTime)}" +
+        _status.Text = $"Checked {BootTime.Format(report.Timestamp)}  ·  Last restart {BootTime.Format(report.LastBootTime)}" +
             (report.Errors.Count > 0 ? $"  ·  {report.Errors.Count} check(s) couldn't run" : "");
 
-        var selectedCode = (_list.SelectedItems.Count > 0 ? _list.SelectedItems[0].Tag as Finding : null)?.Code;
+        var selected = _list.SelectedItems.Count > 0 ? _list.SelectedItems[0].Tag as Finding : null;
 
         _list.BeginUpdate();
         _list.Items.Clear();
@@ -215,6 +291,7 @@ internal sealed class ReportForm : Form
             _list.Items.Add(new ListViewItem([SeverityText(finding.Severity), finding.Title])
             {
                 Tag = finding,
+                ImageKey = finding.Severity >= Severity.Critical ? nameof(Severity.Critical) : finding.Severity.ToString(),
                 ForeColor = SeverityColor(finding.Severity),
                 ToolTipText = finding.Title,
             });
@@ -222,7 +299,12 @@ internal sealed class ReportForm : Form
 
         foreach (var error in report.Errors)
         {
-            _list.Items.Add(new ListViewItem(["Error", $"{error.CheckName} couldn't run"]) { Tag = error, ForeColor = CriticalText });
+            _list.Items.Add(new ListViewItem(["Error", $"{error.CheckName} couldn't run"])
+            {
+                Tag = error,
+                ImageKey = nameof(Severity.Warning),
+                ForeColor = WarningText,
+            });
         }
 
         _list.EndUpdate();
@@ -230,16 +312,58 @@ internal sealed class ReportForm : Form
 
         if (_list.Items.Count == 0)
         {
-            ShowText("No problems found", "Windows Update looks healthy. It's safe to restart.", null);
+            _shown = null;
+            Render("No problems found", "Windows Update looks healthy. It's safe to restart.", null, []);
             _fixButtons.Controls.Clear();
             _fixesHeader.Visible = false;
             return;
         }
 
         // Keep the user's selection across rescans when the same finding is still there.
-        var keep = _list.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Tag is Finding f && f.Code == selectedCode) ?? _list.Items[0];
+        var keep = _list.Items.Cast<ListViewItem>().FirstOrDefault(i =>
+            i.Tag is Finding f && selected is not null && f.Code == selected.Code && f.Title == selected.Title) ?? _list.Items[0];
         keep.Selected = true;
         keep.Focused = true;
+    }
+
+    /// <summary>One line under the verdict: what it means, how many problems, and whether updates are paused.</summary>
+    private string Summary(HealthReport report)
+    {
+        var critical = report.Findings.Count(f => f.Severity == Severity.Critical);
+        var warnings = report.Findings.Count(f => f.Severity == Severity.Warning);
+        var advice = report.Verdict switch
+        {
+            RestartVerdict.DoNotRestart => "Don't restart or shut down until the problems below are dealt with.",
+            RestartVerdict.Caution => "A restart is probably fine, but fix the warnings below first.",
+            RestartVerdict.RestartRecommended => "Updates will finish during the next restart. Use Restart, not Shut down.",
+            _ => "Nothing to do.",
+        };
+
+        var counts = new List<string>();
+        if (critical > 0)
+        {
+            counts.Add(CbsPackages.Count(critical, "critical problem"));
+        }
+
+        if (warnings > 0)
+        {
+            counts.Add(CbsPackages.Count(warnings, "warning"));
+        }
+
+        var text = advice + (counts.Count > 0 ? $"  ·  {string.Join(", ", counts)}" : "");
+        try
+        {
+            if (_pauseStatus() is { IsPaused: true, PausedUntil: { } until })
+            {
+                text += $"  ·  Windows Update paused until {until.ToLocalTime().ToString("d", CultureInfo.CurrentCulture)}";
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            // The pause state is a nice-to-have here.
+        }
+
+        return text;
     }
 
     private static string SeverityText(Severity severity) => severity switch
@@ -256,6 +380,17 @@ internal sealed class ReportForm : Form
         _ => InfoText,
     };
 
+    private static Bitmap Dot(int size, Color color)
+    {
+        var bitmap = new Bitmap(size, size);
+        using var g = Graphics.FromImage(bitmap);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var brush = new SolidBrush(color);
+        var inset = size / 4f;
+        g.FillEllipse(brush, inset, inset, size - (2 * inset), size - (2 * inset));
+        return bitmap;
+    }
+
     private void ShowSelected()
     {
         _fixButtons.SuspendLayout();
@@ -264,15 +399,22 @@ internal sealed class ReportForm : Form
         {
             if (_list.SelectedItems.Count == 0)
             {
+                _shown = null;
                 _detail.Clear();
-                _fixesHeader.Visible = false;
+                _links.Visible = _fixesHeader.Visible = false;
                 return;
             }
 
             switch (_list.SelectedItems[0].Tag)
             {
                 case Finding finding:
-                    ShowText(finding.Title, finding.Detail, finding.Data);
+                    if (!ReferenceEquals(finding, _shown) && finding.Title != _shown?.Title)
+                    {
+                        _showItems = false;
+                    }
+
+                    _shown = finding;
+                    RenderShown();
                     foreach (var fix in _fixes.FixesFor(finding, _report))
                     {
                         _fixButtons.Controls.Add(FixButton(fix, finding));
@@ -281,7 +423,8 @@ internal sealed class ReportForm : Form
                     break;
 
                 case CheckError error:
-                    ShowText($"{error.CheckName} couldn't run", error.Message, null);
+                    _shown = null;
+                    Render($"{error.CheckName} couldn't run", error.Message, null, []);
                     break;
             }
 
@@ -290,6 +433,14 @@ internal sealed class ReportForm : Form
         finally
         {
             _fixButtons.ResumeLayout(true);
+        }
+    }
+
+    private void RenderShown()
+    {
+        if (_shown is { } f)
+        {
+            Render(f.Title, f.Detail, f.Data, f.Items);
         }
     }
 
@@ -309,34 +460,127 @@ internal sealed class ReportForm : Form
         return button;
     }
 
-    /// <summary>Title in bold, the explanation, then the raw evidence in grey.</summary>
-    private void ShowText(string title, string body, IReadOnlyDictionary<string, string>? evidence)
+    /// <summary>
+    /// Title, then the explanation: "• " lines become real bullets (wrapped lines line up), "What to do:" is
+    /// bold, then the evidence and, on request, the full item list in small grey text.
+    /// </summary>
+    private void Render(string title, string body, IReadOnlyDictionary<string, string>? evidence, IReadOnlyList<string> items)
     {
         _detail.SuspendLayout();
         _detail.Clear();
 
-        _detail.SelectionFont = new Font(Font.FontFamily, Font.SizeInPoints * 1.2f, FontStyle.Bold);
-        _detail.AppendText(title + "\n\n");
+        Append(title + "\n\n", _titleFont, SystemColors.WindowText);
 
-        _detail.SelectionFont = Font;
-        _detail.SelectionColor = SystemColors.WindowText;
-        _detail.AppendText(body.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n");
-
-        if (evidence is { Count: > 0 })
+        foreach (var line in body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
         {
-            _detail.SelectionFont = new Font(Font, FontStyle.Bold);
-            _detail.SelectionColor = SystemColors.GrayText;
-            _detail.AppendText("\nEvidence\n");
-            _detail.SelectionFont = Font;
-            foreach (var (key, value) in evidence.Where(kv => !string.IsNullOrEmpty(kv.Value)))
+            if (line.StartsWith("• ", StringComparison.Ordinal))
             {
-                _detail.AppendText($"{key}: {value}\n");
+                Append(line[2..] + "\n", Font, SystemColors.WindowText, bullet: true);
             }
+            else if (line.StartsWith(WhatToDo, StringComparison.Ordinal))
+            {
+                Append(WhatToDo, _boldFont, SystemColors.WindowText);
+                Append(line[WhatToDo.Length..] + "\n", Font, SystemColors.WindowText);
+            }
+            else
+            {
+                Append(line + "\n", Font, SystemColors.WindowText);
+            }
+        }
+
+        var facts = (evidence ?? new Dictionary<string, string>())
+            .Where(kv => !string.IsNullOrEmpty(kv.Value))
+            .Select(kv => (Label: EvidenceLabels.GetValueOrDefault(kv.Key, kv.Key), Value: FriendlyValue(kv.Value)))
+            .ToList();
+        if (facts.Count > 0)
+        {
+            Append("\nDetails\n", _smallBoldFont, SystemColors.GrayText);
+            foreach (var (label, value) in facts)
+            {
+                Append($"{label}: {value}\n", _smallFont, SystemColors.GrayText);
+            }
+        }
+
+        if (_showItems && items.Count > 0)
+        {
+            Append($"\nFull list ({items.Count})\n", _smallBoldFont, SystemColors.GrayText);
+            Append(string.Join('\n', items) + "\n", _smallFont, SystemColors.GrayText);
         }
 
         _detail.SelectionStart = 0;
         _detail.ScrollToCaret();
         _detail.ResumeLayout();
+
+        _itemsLink.Visible = items.Count > 0;
+        _itemsLink.Text = _showItems ? "Hide the full list" : $"Show the full list ({items.Count})";
+        _links.Visible = true;
+    }
+
+    private void Append(string text, Font font, Color color, bool bullet = false)
+    {
+        _detail.SelectionStart = _detail.TextLength;
+        _detail.SelectionLength = 0;
+        _detail.SelectionFont = font;
+        _detail.SelectionColor = color;
+        _detail.SelectionBullet = bullet;
+        _detail.SelectionIndent = bullet ? LogicalToDeviceUnits(6) : 0;
+        _detail.SelectionHangingIndent = 0;
+        _detail.AppendText(text);
+    }
+
+    /// <summary>Shows round-trip timestamps in the user's date format; everything else as is.</summary>
+    private static string FriendlyValue(string value) =>
+        value.Length >= 19 && value[4] == '-' && value[10] == 'T'
+            && DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var time)
+            ? BootTime.Format(time)
+            : value;
+
+    private void CopyDetails()
+    {
+        if (_shown is not { } f)
+        {
+            return;
+        }
+
+        var text = new StringBuilder()
+            .AppendLine(CultureInfo.InvariantCulture, $"WU Health Guard {AppInfo.Version}: {f.Title} ({f.Severity}, {f.Code})")
+            .AppendLine()
+            .AppendLine(f.Detail.Replace("\n", Environment.NewLine, StringComparison.Ordinal));
+        if (f.Data.Count > 0)
+        {
+            text.AppendLine();
+            foreach (var (key, value) in f.Data)
+            {
+                text.AppendLine(CultureInfo.InvariantCulture, $"{key}: {value}");
+            }
+        }
+
+        if (f.Items.Count > 0)
+        {
+            text.AppendLine().AppendLine(CultureInfo.InvariantCulture, $"Full list ({f.Items.Count}):");
+            foreach (var item in f.Items)
+            {
+                text.AppendLine(item);
+            }
+        }
+
+        try
+        {
+            Clipboard.SetText(text.ToString());
+            _copyLink.Text = "Copied";
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            _copyLink.Text = "Couldn't copy (clipboard busy)";
+        }
+
+        var timer = new System.Windows.Forms.Timer { Interval = 2000 };
+        timer.Tick += (_, _) =>
+        {
+            _copyLink.Text = "Copy details";
+            timer.Dispose();
+        };
+        timer.Start();
     }
 
     private async Task RunFixAsync(IFix fix, Finding finding)
@@ -388,6 +632,11 @@ internal sealed class ReportForm : Form
         if (disposing)
         {
             _tips.Dispose();
+            _severityIcons.Dispose();
+            _titleFont.Dispose();
+            _boldFont.Dispose();
+            _smallFont.Dispose();
+            _smallBoldFont.Dispose();
         }
 
         base.Dispose(disposing);

@@ -53,12 +53,14 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
                 Severity.Warning,
                 RestartImpact.Caution,
                 Count(odd.Count, "package") + " left halfway through servicing",
-                "These packages are in a state CBS only uses while it works, and a restart didn't move them on:\n" +
-                CbsPackages.List(odd, now) +
-                "\nThe servicing that put them there was interrupted. Don't install more updates until this is repaired.")
+                "These packages are in a state Windows only uses while it's installing, and a restart didn't move them on:\n" +
+                CbsPackages.Summarize(odd, now) + "\n\n" +
+                "The update that put them there was interrupted.\n\n" +
+                "What to do: pause updates and repair the component store before installing anything else.")
             {
                 SuggestedFixIds = [FixIds.PauseUpdates, FixIds.DismRestoreHealth],
                 Data = CountData(odd, now),
+                Items = CbsPackages.Names(odd),
             });
         }
 
@@ -73,13 +75,15 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
                 Severity.Warning,
                 RestartImpact.Caution,
                 $"{Count(lingering.Count, "update package")} waiting {CbsPackages.FormatAge(oldest)} for a restart",
-                "These packages have been pending a long time without a restart:\n" +
-                CbsPackages.List(lingering, now) +
-                "\nIf you only use Shut down and Fast Startup is on, Windows hibernates instead of restarting and never " +
-                "finishes them. Use Restart (not Shut down). If they are still pending after a real restart, they are stuck.")
+                "These packages have been waiting a long time without a real restart:\n" +
+                CbsPackages.Summarize(lingering, now) + "\n\n" +
+                "With Fast Startup on, Shut down is a hibernate, so Windows never gets to finish them.\n\n" +
+                "What to do: use Restart, not Shut down (or turn Fast Startup off). If they're still pending after a real " +
+                "restart, they're stuck, and this turns red.")
             {
                 SuggestedFixIds = [FixIds.TurnOffFastStartup],
                 Data = CountData(lingering, now),
+                Items = CbsPackages.Names(lingering),
             });
         }
 
@@ -93,9 +97,11 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
                 RestartImpact.RestartNeeded,
                 $"{Count(normal.Count, "update package")} waiting for a restart",
                 "These packages were staged since the last restart and will be finished during the next one:\n" +
-                CbsPackages.List(normal, now))
+                CbsPackages.Summarize(normal, now) + "\n\n" +
+                "This is normal. Use Restart (not Shut down) and let \"Working on updates\" finish.")
             {
                 Data = CountData(normal, now),
+                Items = CbsPackages.Names(normal),
             });
         }
 
@@ -121,14 +127,15 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
             $"{Count(stuck.Count, "package")} stuck in {state} for {CbsPackages.FormatAge(oldest)}",
             $"These packages were already {state} before the last restart ({BootTime.Format(lastBoot)}), and that " +
             "restart didn't finish them:\n" +
-            CbsPackages.List(stuck, now) +
-            "\nRestarting again can boot-loop, even if the newest update downloaded and staged without errors. " +
-            "Pause updates so Windows doesn't stage more work on top of this. Try the DISM repair; if it can't find a " +
-            "repair source, an in-place repair install is the fix. Don't delete or rename pending.xml: that leaves " +
-            "these packages stuck halfway.")
+            CbsPackages.Summarize(stuck, now) + "\n\n" +
+            "Restarting again can boot-loop, even if the newest update downloaded and installed without errors.\n\n" +
+            "What to do: keep Windows Update paused so it can't add more on top of this, then try the component store " +
+            "repair. If DISM can't find a repair source, an in-place repair install is the fix. Don't delete or rename " +
+            "pending.xml: that gets Windows booting but leaves these packages stuck halfway.")
         {
             SuggestedFixIds = [FixIds.PauseUpdates, FixIds.DismRestoreHealth, FixIds.RemoveStuckPackage],
             Data = data,
+            Items = CbsPackages.Names(stuck),
         };
     }
 
@@ -139,5 +146,5 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
         [FindingDataKeys.Age] = CbsPackages.FormatAge(packages.Max(p => p.Age(now))),
     };
 
-    private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
+    private static string Count(int n, string noun) => CbsPackages.Count(n, noun);
 }

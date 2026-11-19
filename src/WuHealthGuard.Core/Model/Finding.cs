@@ -43,6 +43,12 @@ public sealed record Finding(
     /// <summary>Ids of fixes that may resolve this finding, most appropriate first.</summary>
     public IReadOnlyList<string> SuggestedFixIds { get; init; } = [];
 
+    /// <summary>
+    /// A long list behind the finding (e.g. every stuck package name). The report shows it on request instead of
+    /// in <see cref="Detail"/>.
+    /// </summary>
+    public IReadOnlyList<string> Items { get; init; } = [];
+
     /// <summary>Structured evidence (package name, registry path, HRESULT, ...). Fixes read parameters from here.</summary>
     public IReadOnlyDictionary<string, string> Data { get; init; } = new Dictionary<string, string>();
 }

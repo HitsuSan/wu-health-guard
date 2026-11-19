@@ -33,6 +33,7 @@ internal sealed class TrayContext : ApplicationContext
     private HealthReport? _last;
     private bool _scanning;
     private bool _updating;
+    private string? _runtimeWarnedFor;
 
     /// <param name="updatedFrom">The previous version, when this start is the restart after an update.</param>
     public TrayContext(string? updatedFrom = null)
@@ -212,6 +213,13 @@ internal sealed class TrayContext : ApplicationContext
             return;
         }
 
+        // A framework-dependent exe can't start without its runtime, so don't install one that would fail.
+        if (manifest.DesktopRuntime is { Length: > 0 } runtime && !DotNetRuntimes.HasDesktopRuntime(runtime))
+        {
+            WarnMissingRuntime(manifest, runtime, userInitiated);
+            return;
+        }
+
         if (userInitiated && MessageBox.Show(
                 $"Install version {manifest.Version} ({UpdateRules.FormatSize(manifest.Size)})? The app restarts briefly.",
                 "WU Health Guard", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
@@ -291,6 +299,27 @@ internal sealed class TrayContext : ApplicationContext
         }
 
         _form.ShowReport(report);
+    }
+
+    private void WarnMissingRuntime(UpdateManifest manifest, string runtime, bool userInitiated)
+    {
+        var message = $"Version {manifest.Version} needs the .NET {runtime} Desktop Runtime, which isn't installed. " +
+            "Run WuHealthGuardSetup.exe from the release page (it installs the runtime), or install the runtime from Microsoft.";
+        if (userInitiated)
+        {
+            if (MessageBox.Show(message + "\n\nOpen Microsoft's download page?", "WU Health Guard",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+            {
+                Process.Start(new ProcessStartInfo(DotNetRuntimes.DesktopRuntimeDownloadPage(runtime)) { UseShellExecute = true })?.Dispose();
+            }
+        }
+        else if (_runtimeWarnedFor != manifest.Version)
+        {
+            // Once per version, not every 6 hours.
+            _runtimeWarnedFor = manifest.Version;
+            _app.Log.Write(ActionLogLevel.Warning, message);
+            _icon.ShowBalloonTip(15_000, "Update needs .NET " + runtime, message, ToolTipIcon.Info);
+        }
     }
 
     private void ApplyShutdownGuard()

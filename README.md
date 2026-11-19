@@ -71,19 +71,21 @@ changed. Every action is logged to `C:\ProgramData\WuHealthGuard\logs`.
 
 ## Install
 
-1. Download `WuHealthGuard.exe` from the [latest release](https://github.com/HitsuSan/wu-health-guard/releases/latest).
-2. Put it in a folder that stays put, for example `C:\Program Files\WU Health Guard\`, and run it. The exe
-   isn't code-signed yet, so Windows SmartScreen asks first: **More info → Run anyway**. Then accept the
-   administrator prompt.
-3. Optional: to start it at logon without an administrator prompt each time, run this once from an
-   administrator Command Prompt:
+Download `WuHealthGuardSetup.exe` from the [latest release](https://github.com/HitsuSan/wu-health-guard/releases/latest)
+and run it. It:
 
-```bash
-"C:\Program Files\WU Health Guard\WuHealthGuard.exe" --install
-```
+- installs the .NET 10 Desktop Runtime if the PC doesn't have it yet (downloaded from Microsoft, and only run
+  if it carries Microsoft's signature),
+- installs the app to `C:\Program Files\WU Health Guard`,
+- starts it at every logon without an administrator prompt.
 
-To remove it: **Exit** from the tray menu, run the same command with `--uninstall`, then delete the folder and
-`C:\ProgramData\WuHealthGuard`.
+The installer isn't code-signed yet, so Windows SmartScreen asks first: **More info → Run anyway**.
+
+To remove it, uninstall **WU Health Guard** from Settings → Apps. Logs and backups in
+`C:\ProgramData\WuHealthGuard` are kept; delete that folder too if you don't need them.
+
+The release also has the bare `WuHealthGuard.exe` (about 2 MB) for people who already have the .NET 10
+Desktop Runtime; run `WuHealthGuard.exe --install` from an administrator prompt to start it at logon.
 
 ## Updates
 
@@ -95,7 +97,8 @@ automatically** in the tray menu.
 
 ## Requirements and limits
 
-- Windows 10 or 11, x64.
+- Windows 10 (1809 or later) or 11, x64.
+- The .NET 10 Desktop Runtime (the installer sets it up).
 - Administrator rights (reading servicing state and running DISM need them).
 - English only for now.
 - One copy runs per PC, started for the user who installed it.
@@ -126,6 +129,7 @@ dotnet test WuHealthGuard.slnx
 | `src/WuHealthGuard.Tray` | The WinForms tray app. |
 | `tests/WuHealthGuard.Core.Tests` | Unit tests for the core, with in-memory fakes. |
 | `tools/WuHealthGuard.ReleaseTool` | Signs release manifests in CI. |
+| `installer/` | Inno Setup script for `WuHealthGuardSetup.exe`. |
 
 Design notes and the test plan are in [docs/PLAN.md](docs/PLAN.md).
 
@@ -136,5 +140,7 @@ Releases are signed with a key stored as the `UPDATE_SIGNING_KEY` repository sec
 secret (Settings → Secrets and variables → Actions), then delete the file.
 
 To publish: **Actions → Release → Run workflow**, keep the branch on `main`, and enter a version higher than
-the last one. The workflow tests, builds, signs, tags and publishes `WuHealthGuard.exe` and `update.json`.
+the last one. The workflow tests, builds, signs, tags and publishes `WuHealthGuardSetup.exe`,
+`WuHealthGuard.exe` and `update.json`. The exe is framework-dependent (about 2 MB); `update.json` records
+which .NET major version it needs, and installed copies won't take an update whose runtime is missing.
 Developer and CI builds (`0.1.0-dev`) never update themselves.

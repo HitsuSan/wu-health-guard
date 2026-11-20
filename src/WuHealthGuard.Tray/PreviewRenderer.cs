@@ -26,6 +26,7 @@ internal static class PreviewRenderer
         var fixes = app.CreateFixRunner(new NeverConfirm(), () => 7, new NoRestartGuard());
         RenderWindow(fixes, RedReport(), paused: true, fullScanAt: 37, select: null, Path.Combine(folder, "window-red"));
         RenderWindow(fixes, GreenReport(), paused: false, fullScanAt: null, select: FailedUpdatesCheck.AppFailedCode, Path.Combine(folder, "window-green"));
+        RenderWindow(fixes, ComponentStoreReport(), paused: false, fullScanAt: null, select: null, Path.Combine(folder, "window-fixes"));
         return 0;
     }
 
@@ -184,6 +185,26 @@ internal static class PreviewRenderer
             {
                 SuggestedFixIds = [FixIds.TurnOffFastStartup],
             },
+        ];
+        return new HealthReport(DateTimeOffset.Now, DateTimeOffset.Now.AddHours(-6), findings, []);
+    }
+
+    /// <summary>A damaged component store with its four fixes, nothing running: the "What you can do" list in full.</summary>
+    private static HealthReport ComponentStoreReport()
+    {
+        Finding[] findings =
+        [
+            new(ComponentStoreCheck.CheckId, ComponentStoreCheck.RepairableCode, Severity.Warning, RestartImpact.Caution,
+                "Component store is damaged but repairable",
+                "DISM reports corruption in the component store (WinSxS). Updates may fail to install or roll back. Repair it with " +
+                "DISM /RestoreHealth before installing more updates. If DISM can't find a repair source (0x800F081F, 0x800F0915), " +
+                "an in-place repair install is the fix.")
+            {
+                SuggestedFixIds = [FixIds.DismRestoreHealth, FixIds.SfcScanNow, FixIds.InPlaceRepair, FixIds.PauseUpdates],
+            },
+            new(RebootFlagsCheck.CheckId, RebootFlagsCheck.PendingCode, Severity.Info, RestartImpact.RestartNeeded, "Windows is waiting for a restart", "…"),
+            new(FastStartupCheck.CheckId, FastStartupCheck.OnCode, Severity.Info, RestartImpact.None, "Fast Startup is on", "…"),
+            new(ServicingActivityCheck.CheckId, "WORKER_IDLE", Severity.Info, RestartImpact.None, "Windows' servicing worker is loaded but idle", "…"),
         ];
         return new HealthReport(DateTimeOffset.Now, DateTimeOffset.Now.AddHours(-6), findings, []);
     }

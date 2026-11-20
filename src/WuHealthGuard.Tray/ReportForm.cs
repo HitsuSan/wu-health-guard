@@ -18,7 +18,7 @@ namespace WuHealthGuard.Tray;
 internal sealed partial class ReportForm : Form
 {
     /// <summary>Share of the body width given to the findings list.</summary>
-    private const double ListShare = 0.40;
+    private const double ListShare = 0.34;
 
     private const string WhatToDo = "What to do:";
 
@@ -66,25 +66,27 @@ internal sealed partial class ReportForm : Form
     /// <summary>Text, links and fixes, top to bottom; the text box is sized to its content (see <see cref="FitDetail"/>).</summary>
     private readonly TableLayoutPanel _detailLayout = new();
 
-    private readonly RichTextBox _detail = new()
+    /// <summary>Scrolls the whole detail pane (text, links and fixes) as one page.</summary>
+    private readonly Panel _detailScroll = new() { Dock = DockStyle.Fill, AutoScroll = true, BackColor = SystemColors.Window };
+
+    private readonly DetailText _detail = new()
     {
         Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
         ReadOnly = true,
         BorderStyle = BorderStyle.None,
         BackColor = SystemColors.Window,
         DetectUrls = false,
-        ScrollBars = RichTextBoxScrollBars.Vertical,
+        ScrollBars = RichTextBoxScrollBars.None,
     };
 
     private int _detailContentHeight;
-    private bool _fittingDetail;
     private int _detailWidth;
 
     private readonly FlowLayoutPanel _links = new() { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
     private readonly LinkLabel _itemsLink = new() { AutoSize = true };
     private readonly LinkLabel _copyLink = new() { AutoSize = true, Text = "Copy details" };
     private readonly Label _fixesHeader = new() { Text = "What you can do", AutoSize = true, Dock = DockStyle.Fill };
-    private readonly FlowLayoutPanel _fixButtons = new() { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
+    private readonly FixActionList _actions = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Margin = Padding.Empty };
     private readonly Label _status = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, ForeColor = Palette.MutedText };
     private readonly FlatButton _rescanButton = new() { Text = "Check again", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly FlatButton _deepButton = new() { Text = "Full component store scan", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
@@ -173,12 +175,14 @@ internal sealed partial class ReportForm : Form
         _fixesHeader.Font = _boldFont;
         _fixesHeader.Padding = new Padding(0, LogicalToDeviceUnits(12), 0, LogicalToDeviceUnits(4));
 
-        // Text, then links and fixes right under it, then empty space. The text box takes the height of its
-        // text, up to what's left after the links and fixes; longer text scrolls inside it.
+        // Text, then links and fixes right under it. The text box takes the height of its text; when it all
+        // doesn't fit, the whole pane scrolls.
         var detailLayout = _detailLayout;
-        detailLayout.Dock = DockStyle.Fill;
+        detailLayout.Dock = DockStyle.Top;
+        detailLayout.AutoSize = true;
+        detailLayout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
         detailLayout.ColumnCount = 1;
-        detailLayout.RowCount = 5;
+        detailLayout.RowCount = 4;
         detailLayout.Padding = new Padding(LogicalToDeviceUnits(16), LogicalToDeviceUnits(12), LogicalToDeviceUnits(16), LogicalToDeviceUnits(12));
         detailLayout.BackColor = SystemColors.Window;
         detailLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -187,18 +191,19 @@ internal sealed partial class ReportForm : Form
             detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         }
 
-        detailLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         detailLayout.Controls.Add(_detail, 0, 0);
         detailLayout.Controls.Add(_links, 0, 1);
         detailLayout.Controls.Add(_fixesHeader, 0, 2);
-        detailLayout.Controls.Add(_fixButtons, 0, 3);
+        detailLayout.Controls.Add(_actions, 0, 3);
+        _actions.SmallFont = _smallFont;
+        _actions.TagFont = new Font(Font.FontFamily, Font.SizeInPoints * 0.75f, FontStyle.Bold);
+        _detail.WheelTarget = _detailScroll;
         _detail.Margin = Padding.Empty;
         _detail.ContentsResized += (_, e) =>
         {
             _detailContentHeight = e.NewRectangle.Height;
             FitDetail();
         };
-        detailLayout.SizeChanged += (_, _) => FitDetail();
         _detail.SizeChanged += (_, _) =>
         {
             // A new width re-wraps the text: ask the box for its content height again (answers via ContentsResized).
@@ -208,12 +213,10 @@ internal sealed partial class ReportForm : Form
                 SendMessageW(_detail.Handle, EmRequestResize, 0, 0);
             }
         };
-        _fixButtons.SizeChanged += (_, _) => FitDetail();
-        _links.VisibleChanged += (_, _) => FitDetail();
-        _fixesHeader.VisibleChanged += (_, _) => FitDetail();
 
         _split.Panel1.Controls.Add(_list);
-        _split.Panel2.Controls.Add(detailLayout);
+        _detailScroll.Controls.Add(detailLayout);
+        _split.Panel2.Controls.Add(_detailScroll);
         // Minimum pane widths are applied in PlaceSplitter, once the window has its real size. Setting them
         // here, while the SplitContainer is still at its 150 px default, throws and kills the app.
         _split.SplitterWidth = LogicalToDeviceUnits(6);
@@ -303,7 +306,7 @@ internal sealed partial class ReportForm : Form
 
         var current = _activities.Current;
         var heavy = _activities.Any(ActivityKind.Check, ActivityKind.FullScan, ActivityKind.Fix);
-        _rescanButton.Enabled = _fixButtons.Enabled = !heavy;
+        _rescanButton.Enabled = _actions.Enabled = !heavy;
 
         if (_activities.Running(ActivityKind.FullScan) is { } fullScan)
         {
@@ -386,33 +389,13 @@ internal sealed partial class ReportForm : Form
     }
 
     /// <summary>The single column fills the list, so each row is drawn full width.</summary>
-    /// <summary>
-    /// Sizes the text box to its text, so the links and fix buttons sit right under it. When the text is
-    /// longer than the room left over, the box takes all of that room and scrolls.
-    /// </summary>
+    /// <summary>Sizes the text box to its text, so the links and fixes sit right under it.</summary>
     private void FitDetail()
     {
-        if (_fittingDetail || _detailLayout.ClientSize.Height <= 0)
+        var height = Math.Max(LogicalToDeviceUnits(20), _detailContentHeight + LogicalToDeviceUnits(4));
+        if (_detail.Height != height)
         {
-            return;
-        }
-
-        _fittingDetail = true;
-        try
-        {
-            static int Used(Control c) => c.Visible ? c.Height + c.Margin.Vertical : 0;
-            var room = _detailLayout.ClientSize.Height - _detailLayout.Padding.Vertical
-                - Used(_links) - Used(_fixesHeader) - Used(_fixButtons);
-            var wanted = _detailContentHeight + LogicalToDeviceUnits(4);
-            var height = Math.Max(LogicalToDeviceUnits(40), Math.Min(wanted, room));
-            if (_detail.Height != height)
-            {
-                _detail.Height = height;
-            }
-        }
-        finally
-        {
-            _fittingDetail = false;
+            _detail.Height = height;
         }
     }
 
@@ -453,7 +436,7 @@ internal sealed partial class ReportForm : Form
         _list.Items.Clear();
         foreach (var finding in report.Ordered)
         {
-            _list.Items.Add(new ListViewItem(finding.Title) { Tag = finding, ToolTipText = finding.Title });
+            _list.Items.Add(new ListViewItem(finding.Title) { Tag = finding });
         }
 
         foreach (var error in report.Errors)
@@ -463,12 +446,13 @@ internal sealed partial class ReportForm : Form
 
         _list.EndUpdate();
         FitColumns();
+        _list.UpdateToolTips();
 
         if (_list.Items.Count == 0)
         {
             _shown = null;
             Render("No problems found", "Windows Update looks healthy. It's safe to restart.", null, []);
-            _fixButtons.Controls.Clear();
+            _actions.Clear();
             _fixesHeader.Visible = false;
             return;
         }
@@ -559,8 +543,8 @@ internal sealed partial class ReportForm : Form
 
     private void ShowSelected()
     {
-        _fixButtons.SuspendLayout();
-        _fixButtons.Controls.Clear();
+        _actions.Clear();
+        _detailLayout.SuspendLayout();
         try
         {
             if (_list.SelectedItems.Count == 0)
@@ -579,14 +563,20 @@ internal sealed partial class ReportForm : Form
                         _showItems = false;
                     }
 
+                    if (!ReferenceEquals(finding, _shown))
+                    {
+                        _detailScroll.AutoScrollPosition = Point.Empty;
+                    }
+
                     _shown = finding;
                     RenderShown();
-                    var primaryUsed = false;
+
+                    // Checks list fixes best first, so the first one offered is the recommended one.
+                    var recommended = true;
                     foreach (var fix in _fixes.FixesFor(finding, _report))
                     {
-                        var primary = !primaryUsed && fix.Risk == FixRisk.Safe && fix.Id != FixIds.InPlaceRepair;
-                        primaryUsed |= primary;
-                        _fixButtons.Controls.Add(FixButton(fix, finding, primary));
+                        _actions.Add(FixButton(fix, finding, recommended), FixGuides.For(fix), recommended);
+                        recommended = false;
                     }
 
                     break;
@@ -597,11 +587,11 @@ internal sealed partial class ReportForm : Form
                     break;
             }
 
-            _fixesHeader.Visible = _fixButtons.Controls.Count > 0;
+            _fixesHeader.Visible = _actions.Count > 0;
         }
         finally
         {
-            _fixButtons.ResumeLayout(true);
+            _detailLayout.ResumeLayout(true);
         }
     }
 
@@ -613,7 +603,7 @@ internal sealed partial class ReportForm : Form
         }
     }
 
-    /// <param name="primary">The first safe fix is the filled blue button; the rest are outlined.</param>
+    /// <param name="primary">The recommended fix is the filled blue button; the rest are outlined.</param>
     private FlatButton FixButton(IFix fix, Finding finding, bool primary)
     {
         var button = new FlatButton
@@ -621,21 +611,18 @@ internal sealed partial class ReportForm : Form
             Text = fix.Risk == FixRisk.Risky ? $"{fix.Title}…" : fix.Title,
             Kind = primary ? FlatButtonKind.Primary : FlatButtonKind.Outline,
             Warning = fix.Risk == FixRisk.Risky,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Margin = new Padding(0, 0, LogicalToDeviceUnits(8), LogicalToDeviceUnits(6)),
             Tag = fix,
         };
         if (fix.Id == FixIds.InPlaceRepair)
         {
-            // Not a one-click fix: the repair window finds and checks the media first.
-            _tips.SetToolTip(button, "Opens the in-place repair helper: which route fits this PC, which ISO it needs, and a check of " +
-                "the ISO by the app and by Windows Setup. Nothing changes until you start the repair there.\n\n" + fix.Description);
+            // Not a one-click fix: the repair window finds and checks the media first. The plain explanation is
+            // next to the button; the tooltip has the technical one.
+            _tips.SetToolTip(button, fix.Description);
             button.Click += (_, _) => _openRepair(finding);
             return button;
         }
 
-        _tips.SetToolTip(button, (fix.Risk == FixRisk.Risky ? "Asks for confirmation and makes a backup first.\n\n" : "") + fix.Description);
+        _tips.SetToolTip(button, fix.Description);
         button.Click += async (_, _) => await RunFixAsync(fix, finding);
         return button;
     }
@@ -870,6 +857,25 @@ internal sealed partial class ReportForm : Form
     }
 
     private const int EmRequestResize = 0x0400 + 65;
+    private const int WmMouseWheel = 0x020A;
+
+    /// <summary>The detail text: no scroll bars of its own, so the mouse wheel scrolls the pane around it.</summary>
+    private sealed class DetailText : RichTextBox
+    {
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public Control? WheelTarget { get; set; }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WmMouseWheel && WheelTarget is { IsHandleCreated: true } target)
+            {
+                SendMessageW(target.Handle, m.Msg, m.WParam, m.LParam);
+                return;
+            }
+
+            base.WndProc(ref m);
+        }
+    }
 
     [LibraryImport("user32.dll")]
     private static partial nint SendMessageW(nint hWnd, int msg, nint wParam, nint lParam);

@@ -36,7 +36,8 @@ public sealed class PauseUpdatesFix(IUpdatePauseController pause, TimeProvider t
 
     public FixRisk Risk => FixRisk.Safe;
 
-    private int Days => Math.Clamp(pauseDays(), 1, GuardPolicy.MaxPauseDays);
+    /// <summary>How long a pause lasts, in days.</summary>
+    public int Days => Math.Clamp(pauseDays(), 1, GuardPolicy.MaxPauseDays);
 
     public string? CannotApplyReason(Finding? finding, HealthReport? report) =>
         pause.GetStatus() is { IsPaused: true, PausedUntil: var until }

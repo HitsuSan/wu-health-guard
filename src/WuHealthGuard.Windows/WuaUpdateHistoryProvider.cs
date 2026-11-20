@@ -43,6 +43,16 @@ public sealed class WuaUpdateHistoryProvider : IUpdateHistoryProvider
                 // Some entries (e.g. from other clients) have no identity.
             }
 
+            string? client = null;
+            try
+            {
+                client = entry.ClientApplicationID;
+            }
+            catch (Microsoft.CSharp.RuntimeBinder.RuntimeBinderException)
+            {
+                // Not every entry has it.
+            }
+
             DateTime date = entry.Date; // WUA reports UTC.
             entries.Add(new UpdateHistoryEntry(
                 updateId,
@@ -50,7 +60,10 @@ public sealed class WuaUpdateHistoryProvider : IUpdateHistoryProvider
                 new DateTimeOffset(DateTime.SpecifyKind(date, DateTimeKind.Utc)),
                 (UpdateOperation)operation,
                 (UpdateResultCode)(int)entry.ResultCode,
-                (int)entry.HResult));
+                (int)entry.HResult)
+            {
+                ClientApplicationId = client,
+            });
         }
 
         return entries;

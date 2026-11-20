@@ -93,7 +93,11 @@ public sealed record UpdateHistoryEntry(
     DateTimeOffset Date,
     UpdateOperation Operation,
     UpdateResultCode ResultCode,
-    int HResult);
+    int HResult)
+{
+    /// <summary>Which client installed it (WUA <c>ClientApplicationID</c>), e.g. the Microsoft Store. May be null.</summary>
+    public string? ClientApplicationId { get; init; }
+}
 
 public interface IUpdateHistoryProvider
 {

@@ -449,8 +449,78 @@ public class FailedUpdatesCheckTests
             Entry("a", UpdateResultCode.Failed, 1)));
         Assert.Equal(FailedUpdatesCheck.RepeatedCode, f.Code);
         Assert.Equal(RestartImpact.Caution, f.Impact);
-        Assert.Equal("3", f.Data[FindingDataKeys.Count]);
+        Assert.Equal("3", f.Data[FindingDataKeys.Attempts]);
     }
+
+    private const string StoreApp = "9NRZT3Q9R3DL-Microsoft.WindowsAppRuntime.2";
+    private const int DownloadFailed = unchecked((int)0x80240034);
+
+    [Fact]
+    public async Task Store_app_update_failure_is_informational_with_store_advice()
+    {
+        var f = Assert.Single(await Run(
+            Entry("app", UpdateResultCode.Failed, 2, title: StoreApp, hresult: DownloadFailed),
+            Entry("app", UpdateResultCode.Failed, 1, title: StoreApp, hresult: DownloadFailed)));
+
+        Assert.Equal(FailedUpdatesCheck.AppFailedCode, f.Code);
+        Assert.Equal(Severity.Info, f.Severity);
+        Assert.Equal(RestartImpact.None, f.Impact);
+        Assert.Equal("A Microsoft Store app update failed: Microsoft.WindowsAppRuntime.2", f.Title);
+        Assert.Contains("(the download failed)", f.Detail, StringComparison.Ordinal);
+        Assert.Contains("Microsoft Store > Library > Get updates", f.Detail, StringComparison.Ordinal);
+        Assert.Empty(f.SuggestedFixIds);
+        Assert.Equal("2", f.Data[FindingDataKeys.Attempts]);
+    }
+
+    [Fact]
+    public async Task Store_client_marks_an_app_update_even_without_a_product_id()
+    {
+        var entry = Entry("app", UpdateResultCode.Failed, 1, title: "Microsoft.Photos") with { ClientApplicationId = "Microsoft Store" };
+        Assert.Equal(FailedUpdatesCheck.AppFailedCode, Assert.Single(await Run(entry)).Code);
+    }
+
+    [Fact]
+    public async Task Defender_definition_failure_is_informational()
+    {
+        var f = Assert.Single(await Run(Entry("def", UpdateResultCode.Failed, 1,
+            title: "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602 (Version 1.421.1.0)")));
+        Assert.Equal(Severity.Info, f.Severity);
+        Assert.Equal("A Microsoft Defender update failed", f.Title);
+    }
+
+    [Fact]
+    public async Task Windows_download_failure_suggests_services_and_cache_never_dism()
+    {
+        var f = Assert.Single(await Run(Entry("a", UpdateResultCode.Failed, 1, hresult: DownloadFailed)));
+        Assert.Equal(Severity.Warning, f.Severity);
+        Assert.Equal([FixIds.RestartUpdateServices, FixIds.ResetUpdateCache], f.SuggestedFixIds);
+        Assert.Contains("couldn't be downloaded", f.Detail, StringComparison.Ordinal);
+        Assert.Contains("What to do:", f.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Component_store_error_suggests_the_dism_repair()
+    {
+        var f = Assert.Single(await Run(Entry("a", UpdateResultCode.Failed, 1, hresult: unchecked((int)0x80073712))));
+        Assert.Equal([FixIds.DismRestoreHealth], f.SuggestedFixIds);
+        Assert.Contains("(the component store is damaged)", f.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Unknown_error_gets_a_search_hint_with_the_code()
+    {
+        var f = Assert.Single(await Run(Entry("a", UpdateResultCode.Failed, 1, hresult: unchecked((int)0x8024ABCD))));
+        Assert.Contains("\"Windows Update 0x8024ABCD\"", f.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(FixIds.DismRestoreHealth, f.SuggestedFixIds);
+    }
+
+    [Theory]
+    [InlineData(StoreApp, UpdateSource.StoreApp)]
+    [InlineData("2026-11 Cumulative Update for Windows 11 Version 25H2 for x64-based Systems (KB5070001)", UpdateSource.Windows)]
+    [InlineData("9-not-a-product-id", UpdateSource.Windows)]
+    [InlineData("Security Intelligence Update for Microsoft Defender Antivirus - KB2267602", UpdateSource.Definitions)]
+    public void Update_sources_are_recognized(string title, UpdateSource expected) =>
+        Assert.Equal(expected, UpdateKnowledge.SourceOf(new UpdateHistoryEntry("x", title, T.Now, UpdateOperation.Installation, UpdateResultCode.Failed, 0)));
 
     [Fact]
     public async Task Old_failures_outside_lookback_are_ignored() =>

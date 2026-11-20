@@ -32,7 +32,9 @@ been going on, shows the evidence (package names, registry keys, error codes), a
 - **Restart flags.** RebootPending, RebootRequired, PendingFileRenameOperations and related flags, including
   flags that survived a restart when they shouldn't have.
 - **Component store.** DISM's health check, plus a full DISM scan on demand.
-- **Update history.** Updates whose last install attempt failed, and updates that keep failing.
+- **Update history.** Updates whose last install attempt failed, and updates that keep failing, with the
+  error code explained in plain language and fixes that match it (a failed download never gets the DISM
+  repair). Failed Microsoft Store app and Defender updates are shown as info: they don't affect servicing.
 - **Fast Startup.** With Fast Startup on, *Shut down* is really a hibernate, so pending update work never runs.
   Only *Restart* finishes it.
 - **Servicing in progress.** Whether Windows is installing something right now.

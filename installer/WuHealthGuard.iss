@@ -41,6 +41,7 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=WU Health Guard
 UninstallDisplayIcon={app}\WuHealthGuard.exe
+SetupIconFile=..\src\WuHealthGuard.Tray\app.ico
 ; The app is stopped explicitly in PrepareToInstall. Restart Manager would ask it to close, and while the light
 ; is red the app deliberately holds shutdown-style requests.
 CloseApplications=no

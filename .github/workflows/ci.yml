@@ -36,6 +36,23 @@ jobs:
           $r = Invoke-WebRequest -Method Head -Uri https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe -MaximumRedirection 5 -UseBasicParsing
           if ($r.StatusCode -ne 200) { throw "Runtime download link returned $($r.StatusCode)." }
 
+      # Renders the tray icons and the report window on real Windows (sample data, changes nothing), so visual
+      # changes can be checked before they ship. Informational: it doesn't fail the build.
+      - name: Render UI preview
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $out = Join-Path $pwd 'ui-preview'
+          Start-Process -FilePath publish/WuHealthGuard.exe -ArgumentList '--render-preview', "`"$out`"" -Wait
+          Get-ChildItem $out | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-preview
+          path: ui-preview
+          if-no-files-found: warn
+
       - uses: actions/upload-artifact@v4
         with:
           name: WuHealthGuard-win-x64

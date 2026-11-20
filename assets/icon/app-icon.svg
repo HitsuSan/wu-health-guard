@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- WU Health Guard app icon: the faceted badge (concept B, approved).
+       The silhouette is the app's original badge; regenerate the .ico with tools/icons/make-ico.sh. -->
+  <!-- Scaled 95% so the outer edge's sharp bottom point stays inside the canvas. -->
+  <g transform="translate(32 32) scale(0.95) translate(-32 -32)">
+  <path d="M32 4 L58 14 L56 36 L32 60 L8 36 L6 14 Z" fill="none" stroke="#000" stroke-opacity=".28" stroke-width="7" stroke-linejoin="miter"/>
+  <path d="M32 4 L58 14 L56 36 L32 60 L8 36 L6 14 Z" fill="#23843A"/>
+  <path d="M32 4 L32 60 L8 36 L6 14 Z" fill="#3DB45A"/>
+  <path d="M32 11.5 L51.5 19 L50 35 L32 52.5 L14 35 L12.5 19 Z" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="2" stroke-linejoin="miter"/>
+  <path d="M32 4 L58 14 L56 36 L32 60 L8 36 L6 14 Z" fill="none" stroke="#fff" stroke-width="4" stroke-linejoin="miter"/>
+  </g>
+</svg>

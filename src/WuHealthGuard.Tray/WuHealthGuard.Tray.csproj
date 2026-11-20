@@ -8,6 +8,8 @@
     <RootNamespace>WuHealthGuard.Tray</RootNamespace>
     <AssemblyName>WuHealthGuard</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Exe, taskbar, Start menu and Settings > Apps icon. Regenerate with tools/icons/make-ico.sh. -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Dynamic COM (WUA) and WinForms aren't trim-safe. -->
@@ -23,6 +25,11 @@
   <ItemGroup>
     <AssemblyMetadata Include="UpdatePublicKey" Value="$(UpdatePublicKey)" />
     <AssemblyMetadata Include="UpdateFeedUrl" Value="$(UpdateFeedUrl)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Also embedded, for window title bars (AppIcon.cs). -->
+    <EmbeddedResource Include="app.ico" LogicalName="WuHealthGuard.app.ico" />
   </ItemGroup>
 
   <ItemGroup>

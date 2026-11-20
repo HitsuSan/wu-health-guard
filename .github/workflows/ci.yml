@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write # only used to push UI preview images to the ui-preview branch
     steps:
       - uses: actions/checkout@v4
 
@@ -47,19 +49,23 @@ jobs:
           Start-Process -FilePath publish/WuHealthGuard.exe -ArgumentList '--render-preview', "`"$out`"" -Wait
           Get-ChildItem $out | Format-Table Name, Length
 
-      # Also print the preview images (base64) into the log on feature branches, for reviewers that can read
-      # logs but can't download artifacts.
-      - name: Print UI preview
-        if: github.ref != 'refs/heads/main'
+      # Also push the preview images to the ui-preview branch (overwritten each time) on feature-branch pushes,
+      # so reviewers who can fetch the repo but not download artifacts can see them.
+      - name: Publish UI preview to the ui-preview branch
+        if: github.event_name == 'push' && github.ref != 'refs/heads/main'
         continue-on-error: true
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          Get-ChildItem ui-preview -Filter *.png -ErrorAction SilentlyContinue | ForEach-Object {
-            "===PREVIEW $($_.Name)==="
-            $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
-            for ($i = 0; $i -lt $b.Length; $i += 4000) { $b.Substring($i, [Math]::Min(4000, $b.Length - $i)) }
-            "===END==="
-          }
+          if (-not (Test-Path ui-preview)) { exit 0 }
+          $tmp = Join-Path $env:RUNNER_TEMP 'ui-preview-repo'
+          git init -q $tmp
+          Copy-Item ui-preview/* $tmp
+          Set-Content (Join-Path $tmp 'SOURCE.txt') "$env:GITHUB_REF_NAME $env:GITHUB_SHA"
+          git -C $tmp add -A
+          git -C $tmp -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -q -m "UI preview for $env:GITHUB_SHA"
+          git -C $tmp push -f -q "https://x-access-token:$env:GH_TOKEN@github.com/$env:GITHUB_REPOSITORY.git" HEAD:refs/heads/ui-preview
 
       - uses: actions/upload-artifact@v4
         with:

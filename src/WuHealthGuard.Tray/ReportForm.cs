@@ -18,7 +18,7 @@ namespace WuHealthGuard.Tray;
 internal sealed partial class ReportForm : Form
 {
     /// <summary>Share of the body width given to the findings list.</summary>
-    private const double ListShare = 0.40;
+    private const double ListShare = 0.34;
 
     private const string WhatToDo = "What to do:";
 

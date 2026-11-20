@@ -331,6 +331,33 @@ internal sealed class FindingsList : ListView
 
     private float DpiScale => DeviceDpi / 96f;
 
+    /// <summary>Tooltips only for titles cut off with "…": a tooltip repeating a fully visible title just covers the next row.</summary>
+    public void UpdateToolTips()
+    {
+        var titleWidth = TitleWidth;
+        foreach (ListViewItem item in Items)
+        {
+            var cut = TextRenderer.MeasureText(item.Text, Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Width > titleWidth;
+            item.ToolTipText = cut ? item.Text : "";
+        }
+    }
+
+    protected override void OnClientSizeChanged(EventArgs e)
+    {
+        base.OnClientSizeChanged(e);
+        UpdateToolTips();
+    }
+
+    /// <summary>Room for the title in a row, matching OnDrawSubItem.</summary>
+    private int TitleWidth
+    {
+        get
+        {
+            var s = DpiScale;
+            return (int)(ClientSize.Width - ((4 + 10 + 66 + 10 + 8 + 4) * s));
+        }
+    }
+
     protected override void OnDrawColumnHeader(DrawListViewColumnHeaderEventArgs e) => e.DrawDefault = false;
 
     protected override void OnDrawItem(DrawListViewItemEventArgs e) => e.DrawDefault = false;

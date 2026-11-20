@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using WuHealthGuard.Core.Checks;
 using WuHealthGuard.Core.Fixes;
@@ -14,7 +15,7 @@ namespace WuHealthGuard.Tray;
 /// <see cref="Control.LogicalToDeviceUnits(int)"/>, and the split and columns are proportional to the window.
 /// Nothing here may set size constraints before the window has its real size (see <see cref="PlaceSplitter"/>).
 /// </remarks>
-internal sealed class ReportForm : Form
+internal sealed partial class ReportForm : Form
 {
     /// <summary>Share of the body width given to the findings list.</summary>
     private const double ListShare = 0.40;
@@ -62,15 +63,22 @@ internal sealed class ReportForm : Form
     private readonly ImageList _rowHeight = new();
     private readonly FindingsList _list = new() { Dock = DockStyle.Fill };
 
+    /// <summary>Text, links and fixes, top to bottom; the text box is sized to its content (see <see cref="FitDetail"/>).</summary>
+    private readonly TableLayoutPanel _detailLayout = new();
+
     private readonly RichTextBox _detail = new()
     {
-        Dock = DockStyle.Fill,
+        Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
         ReadOnly = true,
         BorderStyle = BorderStyle.None,
         BackColor = SystemColors.Window,
         DetectUrls = false,
         ScrollBars = RichTextBoxScrollBars.Vertical,
     };
+
+    private int _detailContentHeight;
+    private bool _fittingDetail;
+    private int _detailWidth;
 
     private readonly FlowLayoutPanel _links = new() { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true };
     private readonly LinkLabel _itemsLink = new() { AutoSize = true };
@@ -165,23 +173,44 @@ internal sealed class ReportForm : Form
         _fixesHeader.Font = _boldFont;
         _fixesHeader.Padding = new Padding(0, LogicalToDeviceUnits(12), 0, LogicalToDeviceUnits(4));
 
-        var detailLayout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 4,
-            Padding = new Padding(LogicalToDeviceUnits(16), LogicalToDeviceUnits(12), LogicalToDeviceUnits(16), LogicalToDeviceUnits(12)),
-            BackColor = SystemColors.Window,
-        };
+        // Text, then links and fixes right under it, then empty space. The text box takes the height of its
+        // text, up to what's left after the links and fixes; longer text scrolls inside it.
+        var detailLayout = _detailLayout;
+        detailLayout.Dock = DockStyle.Fill;
+        detailLayout.ColumnCount = 1;
+        detailLayout.RowCount = 5;
+        detailLayout.Padding = new Padding(LogicalToDeviceUnits(16), LogicalToDeviceUnits(12), LogicalToDeviceUnits(16), LogicalToDeviceUnits(12));
+        detailLayout.BackColor = SystemColors.Window;
         detailLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var row = 0; row < 4; row++)
+        {
+            detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        }
+
         detailLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        detailLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         detailLayout.Controls.Add(_detail, 0, 0);
         detailLayout.Controls.Add(_links, 0, 1);
         detailLayout.Controls.Add(_fixesHeader, 0, 2);
         detailLayout.Controls.Add(_fixButtons, 0, 3);
+        _detail.Margin = Padding.Empty;
+        _detail.ContentsResized += (_, e) =>
+        {
+            _detailContentHeight = e.NewRectangle.Height;
+            FitDetail();
+        };
+        detailLayout.SizeChanged += (_, _) => FitDetail();
+        _detail.SizeChanged += (_, _) =>
+        {
+            // A new width re-wraps the text: ask the box for its content height again (answers via ContentsResized).
+            if (_detail.Width != _detailWidth && _detail.IsHandleCreated)
+            {
+                _detailWidth = _detail.Width;
+                SendMessageW(_detail.Handle, EmRequestResize, 0, 0);
+            }
+        };
+        _fixButtons.SizeChanged += (_, _) => FitDetail();
+        _links.VisibleChanged += (_, _) => FitDetail();
+        _fixesHeader.VisibleChanged += (_, _) => FitDetail();
 
         _split.Panel1.Controls.Add(_list);
         _split.Panel2.Controls.Add(detailLayout);
@@ -357,6 +386,36 @@ internal sealed class ReportForm : Form
     }
 
     /// <summary>The single column fills the list, so each row is drawn full width.</summary>
+    /// <summary>
+    /// Sizes the text box to its text, so the links and fix buttons sit right under it. When the text is
+    /// longer than the room left over, the box takes all of that room and scrolls.
+    /// </summary>
+    private void FitDetail()
+    {
+        if (_fittingDetail || _detailLayout.ClientSize.Height <= 0)
+        {
+            return;
+        }
+
+        _fittingDetail = true;
+        try
+        {
+            static int Used(Control c) => c.Visible ? c.Height + c.Margin.Vertical : 0;
+            var room = _detailLayout.ClientSize.Height - _detailLayout.Padding.Vertical
+                - Used(_links) - Used(_fixesHeader) - Used(_fixButtons);
+            var wanted = _detailContentHeight + LogicalToDeviceUnits(4);
+            var height = Math.Max(LogicalToDeviceUnits(40), Math.Min(wanted, room));
+            if (_detail.Height != height)
+            {
+                _detail.Height = height;
+            }
+        }
+        finally
+        {
+            _fittingDetail = false;
+        }
+    }
+
     private void FitColumns()
     {
         if (_list.Columns.Count == 1)
@@ -380,7 +439,7 @@ internal sealed class ReportForm : Form
         ArgumentNullException.ThrowIfNull(report);
         _report = report;
         var verdict = report.Verdict;
-        _headline.Text = verdict.Headline();
+        _headline.Text = HeaderTitle(verdict);
         _subline.Text = Summary(report);
         SetHeader(verdict);
         UpdateChip();
@@ -419,6 +478,23 @@ internal sealed class ReportForm : Form
             i.Tag is Finding f && selected is not null && f.Code == selected.Code && f.Title == selected.Title) ?? _list.Items[0];
         keep.Selected = true;
         keep.Focused = true;
+    }
+
+    /// <summary>
+    /// The header's big title. "Updates will finish during the restart" is already the line under it, so the
+    /// title stays short there.
+    /// </summary>
+    private static string HeaderTitle(RestartVerdict verdict) =>
+        verdict == RestartVerdict.RestartRecommended ? RestartVerdict.SafeToRestart.Headline() : verdict.Headline();
+
+    /// <summary>For the preview renderer: selects the first finding with this code.</summary>
+    internal void SelectFinding(string code)
+    {
+        if (_list.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Tag is Finding f && f.Code == code) is { } item)
+        {
+            item.Selected = true;
+            item.Focused = true;
+        }
     }
 
     /// <summary>One line under the verdict: what it means, how many problems, and whether updates are paused.</summary>
@@ -792,4 +868,9 @@ internal sealed class ReportForm : Form
 
         base.OnFormClosing(e);
     }
+
+    private const int EmRequestResize = 0x0400 + 65;
+
+    [LibraryImport("user32.dll")]
+    private static partial nint SendMessageW(nint hWnd, int msg, nint wParam, nint lParam);
 }

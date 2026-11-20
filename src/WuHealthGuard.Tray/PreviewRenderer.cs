@@ -24,8 +24,8 @@ internal static class PreviewRenderer
 
         using var app = new WindowsComposition();
         var fixes = app.CreateFixRunner(new NeverConfirm(), () => 7, new NoRestartGuard());
-        RenderWindow(fixes, RedReport(), paused: true, fullScanAt: 37, Path.Combine(folder, "window-red"));
-        RenderWindow(fixes, GreenReport(), paused: false, fullScanAt: null, Path.Combine(folder, "window-green"));
+        RenderWindow(fixes, RedReport(), paused: true, fullScanAt: 37, select: null, Path.Combine(folder, "window-red"));
+        RenderWindow(fixes, GreenReport(), paused: false, fullScanAt: null, select: FailedUpdatesCheck.AppFailedCode, Path.Combine(folder, "window-green"));
         return 0;
     }
 
@@ -71,7 +71,7 @@ internal static class PreviewRenderer
         sheet.Save(file, ImageFormat.Png);
     }
 
-    private static void RenderWindow(FixRunner fixes, HealthReport report, bool paused, int? fullScanAt, string fileWithoutExtension)
+    private static void RenderWindow(FixRunner fixes, HealthReport report, bool paused, int? fullScanAt, string? select, string fileWithoutExtension)
     {
         var activities = new ActivityCenter();
         using var form = new ReportForm(
@@ -82,7 +82,15 @@ internal static class PreviewRenderer
             _ => { });
         form.StartPosition = FormStartPosition.Manual;
         form.Location = new Point(10, 10);
+
+        // CI screens are small (1024×768): keep the whole window on screen so the capture isn't cut off.
+        var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
+        form.Size = new Size(Math.Min(form.Width, screen.Width - 20), Math.Min(form.Height, screen.Height - 20));
         form.ShowReport(report);
+        if (select is not null)
+        {
+            form.SelectFinding(select);
+        }
 
         using var stop = new CancellationTokenSource();
         using var scan = fullScanAt is { } percent
@@ -143,9 +151,10 @@ internal static class PreviewRenderer
                 "Restarting again can boot-loop, even if the newest update installed without errors.\n\n" +
                 "What to do: keep Windows Update paused, then try the component store repair. If DISM can't find a repair source, an in-place repair install is the fix.")
             {
-                SuggestedFixIds = [FixIds.PauseUpdates, FixIds.DismRestoreHealth, FixIds.InPlaceRepair],
+                // The sample shows updates as paused, and the app hides "Pause Windows Update" then.
+                SuggestedFixIds = [FixIds.DismRestoreHealth, FixIds.InPlaceRepair],
                 Data = Packages(814),
-                Items = ["Example-Package~31bf3856ad364e35~amd64~~10.0.26100.9711 (Uninstall Pending)"],
+                Items = Enumerable.Range(0, 814).Select(i => $"Example-Package-{i}~31bf3856ad364e35~amd64~~10.0.26100.9711 (Uninstall Pending)").ToList(),
             },
             new(CbsPendingPackagesCheck.CheckId, CbsPendingPackagesCheck.StuckCode, Severity.Critical, RestartImpact.Block, "814 packages stuck in Install Pending for 10 days", "…"),
             new(PendingXmlCheck.CheckId, PendingXmlCheck.MissingCode, Severity.Critical, RestartImpact.Block, "Packages are pending but pending.xml is missing", "…"),

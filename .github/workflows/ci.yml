@@ -47,6 +47,20 @@ jobs:
           Start-Process -FilePath publish/WuHealthGuard.exe -ArgumentList '--render-preview', "`"$out`"" -Wait
           Get-ChildItem $out | Format-Table Name, Length
 
+      # Also print the preview images (base64) into the log on feature branches, for reviewers that can read
+      # logs but can't download artifacts.
+      - name: Print UI preview
+        if: github.ref != 'refs/heads/main'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-ChildItem ui-preview -Filter *.png -ErrorAction SilentlyContinue | ForEach-Object {
+            "===PREVIEW $($_.Name)==="
+            $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
+            for ($i = 0; $i -lt $b.Length; $i += 4000) { $b.Substring($i, [Math]::Min(4000, $b.Length - $i)) }
+            "===END==="
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: ui-preview

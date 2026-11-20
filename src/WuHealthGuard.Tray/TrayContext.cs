@@ -13,7 +13,16 @@ internal sealed class TrayContext : ApplicationContext, IRestartGuard
 {
     private const int MaxTooltip = 127;
     private static readonly TimeSpan FirstUpdateCheck = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(6);
+    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(1);
+
+    /// <summary>When an automatic update found the app busy, try again this soon instead of in an hour.</summary>
+    private static readonly TimeSpan BusyRetry = TimeSpan.FromMinutes(2);
+
+    /// <summary>After waking from sleep, give the network a moment before checking.</summary>
+    private static readonly TimeSpan AfterResume = TimeSpan.FromMinutes(1);
+
+    /// <summary>Opening the report window checks for updates if the last check is older than this.</summary>
+    private static readonly TimeSpan CheckOnOpenAfter = TimeSpan.FromMinutes(15);
 
     private readonly WindowsComposition _app = new();
     private readonly NotifyIcon _icon = new() { Icon = TrayIcons.Unknown, Text = "WU Health Guard: checking…", Visible = true };
@@ -25,6 +34,7 @@ internal sealed class TrayContext : ApplicationContext, IRestartGuard
     private readonly ToolStripMenuItem _autoUpdateItem = new("Install updates automatically") { CheckOnClick = true };
     private readonly System.Windows.Forms.Timer _timer = new();
     private readonly System.Windows.Forms.Timer _updateTimer = new();
+    private DateTime _lastUpdateCheck = DateTime.MinValue;
     private readonly HttpClient _http = CreateHttpClient();
     private readonly UpdateClient _updates;
     private readonly ShutdownGuardWindow _guard = new();
@@ -174,6 +184,7 @@ internal sealed class TrayContext : ApplicationContext, IRestartGuard
         }
 
         _updating = true;
+        _lastUpdateCheck = DateTime.UtcNow;
         using var activity = _activities.Begin(ActivityKind.Update, "Checking for updates");
         try
         {
@@ -226,9 +237,10 @@ internal sealed class TrayContext : ApplicationContext, IRestartGuard
 
     private async Task InstallUpdateAsync(UpdateManifest manifest, bool userInitiated)
     {
-        // Never swap the app out in the middle of a check, scan or fix; the next check will try again.
+        // Never swap the app out in the middle of a check, scan or fix; try again shortly.
         if (!userInitiated && _activities.Any(ActivityKind.Check, ActivityKind.FullScan, ActivityKind.Fix))
         {
+            ScheduleUpdateCheck(BusyRetry);
             return;
         }
 
@@ -522,6 +534,12 @@ internal sealed class TrayContext : ApplicationContext, IRestartGuard
 
     private void ShowReport()
     {
+        // People open the window when they're paying attention: a good moment to pick up a new version.
+        if (_updates.Enabled && !_updating && DateTime.UtcNow - _lastUpdateCheck > CheckOnOpenAfter)
+        {
+            _ = CheckForUpdatesAsync(userInitiated: false);
+        }
+
         try
         {
             var form = _form ??= new ReportForm(_fixes, deep => ScanAsync(deep), _app.PauseController.GetStatus, _activities, ShowRepair);
@@ -566,8 +584,22 @@ internal sealed class TrayContext : ApplicationContext, IRestartGuard
     {
         if (e.Mode == PowerModes.Resume)
         {
+            ScheduleUpdateCheck(AfterResume);
             await ScanAsync(false, userInitiated: false);
         }
+    }
+
+    /// <summary>Moves the next automatic update check to <paramref name="delay"/> from now (then hourly again).</summary>
+    private void ScheduleUpdateCheck(TimeSpan delay)
+    {
+        if (!_updates.Enabled)
+        {
+            return;
+        }
+
+        _updateTimer.Stop();
+        _updateTimer.Interval = (int)delay.TotalMilliseconds;
+        _updateTimer.Start();
     }
 
     private static void OpenFolder(string path)

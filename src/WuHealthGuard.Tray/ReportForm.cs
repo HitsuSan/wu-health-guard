@@ -29,6 +29,7 @@ internal sealed class ReportForm : Form
     private static readonly Dictionary<string, string> EvidenceLabels = new(StringComparer.Ordinal)
     {
         [FindingDataKeys.Count] = "Count",
+        [FindingDataKeys.Attempts] = "Failed attempts",
         [FindingDataKeys.Since] = "Since",
         [FindingDataKeys.Age] = "For",
         [FindingDataKeys.PackageName] = "Package",

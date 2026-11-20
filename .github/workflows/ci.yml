@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write # only used to push UI preview images to the ui-preview branch
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +37,41 @@ jobs:
         run: |
           $r = Invoke-WebRequest -Method Head -Uri https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe -MaximumRedirection 5 -UseBasicParsing
           if ($r.StatusCode -ne 200) { throw "Runtime download link returned $($r.StatusCode)." }
+
+      # Renders the tray icons and the report window on real Windows (sample data, changes nothing), so visual
+      # changes can be checked before they ship. Informational: it doesn't fail the build.
+      - name: Render UI preview
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $out = Join-Path $pwd 'ui-preview'
+          Start-Process -FilePath publish/WuHealthGuard.exe -ArgumentList '--render-preview', "`"$out`"" -Wait
+          Get-ChildItem $out | Format-Table Name, Length
+
+      # Also push the preview images to the ui-preview branch (overwritten each time) on feature-branch pushes,
+      # so reviewers who can fetch the repo but not download artifacts can see them.
+      - name: Publish UI preview to the ui-preview branch
+        if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (-not (Test-Path ui-preview)) { exit 0 }
+          $tmp = Join-Path $env:RUNNER_TEMP 'ui-preview-repo'
+          git init -q $tmp
+          Copy-Item ui-preview/* $tmp
+          Set-Content (Join-Path $tmp 'SOURCE.txt') "$env:GITHUB_REF_NAME $env:GITHUB_SHA"
+          git -C $tmp add -A
+          git -C $tmp -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -q -m "UI preview for $env:GITHUB_SHA"
+          git -C $tmp push -f -q "https://x-access-token:$env:GH_TOKEN@github.com/$env:GITHUB_REPOSITORY.git" HEAD:refs/heads/ui-preview
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-preview
+          path: ui-preview
+          if-no-files-found: warn
 
       - uses: actions/upload-artifact@v4
         with:

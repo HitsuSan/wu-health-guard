@@ -24,6 +24,9 @@ internal static class Program
                 return StartupTask.Uninstall(quiet);
             case "--GENERATE-UPDATE-KEY":
                 return GenerateUpdateKey();
+            case var c when string.Equals(c, PreviewRenderer.Switch, StringComparison.OrdinalIgnoreCase):
+                ApplicationConfiguration.Initialize();
+                return PreviewRenderer.Run(args.ElementAtOrDefault(1) ?? "preview");
             case var c when string.Equals(c, DismComponentStoreProbe.HelperSwitch, StringComparison.OrdinalIgnoreCase):
                 return RunComponentStoreHelper(args.Skip(1).Any(a => string.Equals(a, DismComponentStoreProbe.DeepSwitch, StringComparison.OrdinalIgnoreCase)));
             case var c when string.Equals(c, InstallMediaReader.HelperSwitch, StringComparison.OrdinalIgnoreCase):

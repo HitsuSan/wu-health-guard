@@ -61,7 +61,7 @@ internal sealed class RepairForm : Form
         _boldFont = new Font(Font, FontStyle.Bold);
         _titleFont = new Font(Font.FontFamily, Font.SizeInPoints * 1.3f, FontStyle.Bold);
         Text = "WU Health Guard: in-place repair install";
-        Icon = TrayIcons.Unknown;
+        Icon = AppIcon.Icon;
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(LogicalToDeviceUnits(820), LogicalToDeviceUnits(760));
         MinimumSize = new Size(LogicalToDeviceUnits(640), LogicalToDeviceUnits(520));

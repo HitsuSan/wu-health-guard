@@ -1,0 +1,202 @@
+using System.Drawing.Imaging;
+using WuHealthGuard.Core.Abstractions;
+using WuHealthGuard.Core.Checks;
+using WuHealthGuard.Core.Fixes;
+using WuHealthGuard.Core.Guard;
+using WuHealthGuard.Core.Model;
+using WuHealthGuard.Windows;
+
+namespace WuHealthGuard.Tray;
+
+/// <summary>
+/// <c>--render-preview &lt;folder&gt;</c>: draws the tray badges and screenshots the report window with sample
+/// reports, so visual changes can be checked on real Windows (CI uploads the images) before they ship.
+/// Changes nothing on the PC: sample data only, no checks or fixes run.
+/// </summary>
+internal static class PreviewRenderer
+{
+    public const string Switch = "--render-preview";
+
+    public static int Run(string folder)
+    {
+        Directory.CreateDirectory(folder);
+        RenderTraySheet(Path.Combine(folder, "tray-icons.png"));
+
+        using var app = new WindowsComposition();
+        var fixes = app.CreateFixRunner(new NeverConfirm(), () => 7, new NoRestartGuard());
+        RenderWindow(fixes, RedReport(), paused: true, fullScanAt: 37, select: null, Path.Combine(folder, "window-red"));
+        RenderWindow(fixes, GreenReport(), paused: false, fullScanAt: null, select: FailedUpdatesCheck.AppFailedCode, Path.Combine(folder, "window-green"));
+        return 0;
+    }
+
+    private static void RenderTraySheet(string file)
+    {
+        int[] sizes = [16, 20, 24, 32, 48];
+        (string Name, RestartVerdict? Verdict, bool Working)[] states =
+        [
+            ("Safe", RestartVerdict.SafeToRestart, false),
+            ("Caution", RestartVerdict.Caution, false),
+            ("Don't restart", RestartVerdict.DoNotRestart, false),
+            ("Working", RestartVerdict.SafeToRestart, true),
+            ("Unknown", null, false),
+        ];
+
+        const int Label = 130, Cell = 70, Row = 64;
+        using var sheet = new Bitmap(Label + (sizes.Length * Cell * 2), Row * (states.Length + 1), PixelFormat.Format32bppArgb);
+        using var g = Graphics.FromImage(sheet);
+        g.Clear(Color.White);
+        using var font = new Font("Segoe UI", 9f);
+        for (var i = 0; i < sizes.Length; i++)
+        {
+            TextRenderer.DrawText(g, $"{sizes[i]} px", font, new Point(Label + (i * Cell * 2) + 40, 20), Color.Black);
+        }
+
+        using var light = new SolidBrush(Color.FromArgb(0xF3, 0xF3, 0xF3));
+        using var dark = new SolidBrush(Color.FromArgb(0x20, 0x20, 0x20));
+        for (var r = 0; r < states.Length; r++)
+        {
+            var y = Row * (r + 1);
+            TextRenderer.DrawText(g, states[r].Name, font, new Point(10, y + 24), Color.Black);
+            for (var i = 0; i < sizes.Length; i++)
+            {
+                var x = Label + (i * Cell * 2);
+                g.FillRectangle(light, x, y + 4, Cell - 6, Row - 8);
+                g.FillRectangle(dark, x + Cell, y + 4, Cell - 6, Row - 8);
+                using var icon = TrayIcons.Render(states[r].Verdict, sizes[i], states[r].Working, 1);
+                g.DrawImageUnscaled(icon, x + ((Cell - 6 - sizes[i]) / 2), y + ((Row - sizes[i]) / 2));
+                g.DrawImageUnscaled(icon, x + Cell + ((Cell - 6 - sizes[i]) / 2), y + ((Row - sizes[i]) / 2));
+            }
+        }
+
+        sheet.Save(file, ImageFormat.Png);
+    }
+
+    private static void RenderWindow(FixRunner fixes, HealthReport report, bool paused, int? fullScanAt, string? select, string fileWithoutExtension)
+    {
+        var activities = new ActivityCenter();
+        using var form = new ReportForm(
+            fixes,
+            _ => Task.FromResult(ScanOutcome.Skipped),
+            () => paused ? new PauseStatus(true, DateTimeOffset.Now.AddDays(27)) : PauseStatus.NotPaused,
+            activities,
+            _ => { });
+        form.StartPosition = FormStartPosition.Manual;
+        form.Location = new Point(10, 10);
+
+        // CI screens are small (1024×768): keep the whole window on screen so the capture isn't cut off.
+        var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
+        form.Size = new Size(Math.Min(form.Width, screen.Width - 20), Math.Min(form.Height, screen.Height - 20));
+        form.ShowReport(report);
+        if (select is not null)
+        {
+            form.SelectFinding(select);
+        }
+
+        using var stop = new CancellationTokenSource();
+        using var scan = fullScanAt is { } percent
+            ? activities.Begin(ActivityKind.FullScan, "Full component store scan (read-only, usually 10–30 minutes)", stop)
+            : null;
+        scan?.Report("Scanning", fullScanAt);
+
+        form.Show();
+        form.Activate();
+        Settle();
+
+        // A screen capture shows the window exactly as a person sees it; DrawToBitmap is the fallback
+        // (it can't draw rich text, so the detail pane would be blank there).
+        try
+        {
+            using var shot = new Bitmap(form.Width, form.Height, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(shot))
+            {
+                g.CopyFromScreen(form.Location, Point.Empty, form.Size);
+            }
+
+            shot.Save(fileWithoutExtension + ".png", ImageFormat.Png);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or System.Runtime.InteropServices.ExternalException or InvalidOperationException)
+        {
+            using var drawn = new Bitmap(form.Width, form.Height, PixelFormat.Format32bppArgb);
+            form.DrawToBitmap(drawn, new Rectangle(Point.Empty, form.Size));
+            drawn.Save(fileWithoutExtension + "-drawn.png", ImageFormat.Png);
+        }
+
+        form.Hide();
+    }
+
+    private static void Settle()
+    {
+        for (var i = 0; i < 40; i++)
+        {
+            Application.DoEvents();
+            Thread.Sleep(50);
+        }
+    }
+
+    private static HealthReport RedReport()
+    {
+        var since = DateTimeOffset.Now.AddDays(-10);
+        Dictionary<string, string> Packages(int n) => new()
+        {
+            [FindingDataKeys.Count] = n.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [FindingDataKeys.Since] = since.ToString("O"),
+            [FindingDataKeys.Age] = "10 days",
+        };
+        Finding[] findings =
+        [
+            new(CbsPendingPackagesCheck.CheckId, CbsPendingPackagesCheck.StuckCode, Severity.Critical, RestartImpact.Block,
+                "814 packages stuck in Uninstall Pending for 10 days",
+                $"These packages were already Uninstall Pending before the last restart ({BootTime.Format(DateTimeOffset.Now.AddHours(-5))}), and that restart didn't finish them:\n" +
+                "• Build 10.0.26100.9711: 574 packages Uninstall Pending for 10 days\n• Build 10.0.26100.9549: 172 packages Uninstall Pending for 10 days\n• …and 13 more builds\n\n" +
+                "Restarting again can boot-loop, even if the newest update installed without errors.\n\n" +
+                "What to do: keep Windows Update paused, then try the component store repair. If DISM can't find a repair source, an in-place repair install is the fix.")
+            {
+                // The sample shows updates as paused, and the app hides "Pause Windows Update" then.
+                SuggestedFixIds = [FixIds.DismRestoreHealth, FixIds.InPlaceRepair],
+                Data = Packages(814),
+                Items = Enumerable.Range(0, 814).Select(i => $"Example-Package-{i}~31bf3856ad364e35~amd64~~10.0.26100.9711 (Uninstall Pending)").ToList(),
+            },
+            new(CbsPendingPackagesCheck.CheckId, CbsPendingPackagesCheck.StuckCode, Severity.Critical, RestartImpact.Block, "814 packages stuck in Install Pending for 10 days", "…"),
+            new(PendingXmlCheck.CheckId, PendingXmlCheck.MissingCode, Severity.Critical, RestartImpact.Block, "Packages are pending but pending.xml is missing", "…"),
+            new(ComponentStoreCheck.CheckId, ComponentStoreCheck.RepairableCode, Severity.Warning, RestartImpact.Caution, "Component store is damaged but repairable", "…"),
+            new(FastStartupCheck.CheckId, FastStartupCheck.BlockingUpdatesCode, Severity.Warning, RestartImpact.Caution, "Fast Startup is keeping updates from finishing", "…"),
+            new(RebootFlagsCheck.CheckId, RebootFlagsCheck.StaleCode, Severity.Warning, RestartImpact.Caution, "Restart flag survived a restart", "…"),
+            new(RebootFlagsCheck.CheckId, RebootFlagsCheck.PendingCode, Severity.Info, RestartImpact.RestartNeeded, "Windows is waiting for a restart", "…"),
+            new(PendingXmlCheck.CheckId, PendingXmlCheck.LeftoverCode, Severity.Info, RestartImpact.None, "Leftovers from an earlier failed or renamed pending.xml", "…"),
+        ];
+        return new HealthReport(DateTimeOffset.Now, DateTimeOffset.Now.AddHours(-5), findings, []);
+    }
+
+    private static HealthReport GreenReport()
+    {
+        Finding[] findings =
+        [
+            new(FailedUpdatesCheck.CheckId, FailedUpdatesCheck.AppFailedCode, Severity.Info, RestartImpact.None,
+                "A Microsoft Store app update failed: Microsoft.WindowsAppRuntime.2",
+                $"9NRZT3Q9R3DL-Microsoft.WindowsAppRuntime.2\nLast attempt {BootTime.Format(DateTimeOffset.Now.AddHours(-6))}: failed with 0x80240034 (the download failed).\n\n" +
+                "This is an app from the Microsoft Store, not a Windows update. It doesn't affect Windows servicing or restarting.\n\n" +
+                "What to do: Nothing urgent: the Store retries on its own. If it keeps failing, open Microsoft Store > Library > Get updates.")
+            {
+                Data = new Dictionary<string, string> { [FindingDataKeys.HResult] = "0x80240034", [FindingDataKeys.Attempts] = "2" },
+            },
+            new(RebootFlagsCheck.CheckId, RebootFlagsCheck.PendingCode, Severity.Info, RestartImpact.RestartNeeded, "Windows is waiting for a restart", "…"),
+            new(FastStartupCheck.CheckId, FastStartupCheck.OnCode, Severity.Info, RestartImpact.None, "Fast Startup is on", "…")
+            {
+                SuggestedFixIds = [FixIds.TurnOffFastStartup],
+            },
+        ];
+        return new HealthReport(DateTimeOffset.Now, DateTimeOffset.Now.AddHours(-6), findings, []);
+    }
+
+    private sealed class NeverConfirm : IConfirmationPrompt
+    {
+        public Task<bool> ConfirmAsync(ConfirmationRequest request, CancellationToken cancellationToken) => Task.FromResult(false);
+    }
+
+    private sealed class NoRestartGuard : IRestartGuard
+    {
+        public void SetRepairInProgress(bool inProgress)
+        {
+        }
+    }
+}

@@ -104,3 +104,23 @@ public interface IUpdateHistoryProvider
     /// <summary>Most recent entries first.</summary>
     Task<IReadOnlyList<UpdateHistoryEntry>> GetHistoryAsync(int maxEntries, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Times from the Windows event logs that tell a restart which skipped pending update work apart from one that
+/// tried it. All lists are UTC times since the requested start.
+/// </summary>
+/// <param name="Boots">Windows starts (System log, Kernel-General 12).</param>
+/// <param name="RestartRequired">"A reboot is necessary before package … can be changed" (Setup log, Servicing 4).</param>
+/// <param name="ServicingFailures">A package failed to change state (Setup log, Servicing 3).</param>
+/// <param name="UnexpectedShutdowns">Crashes, resets and power cuts (Kernel-Power 41, EventLog 6008).</param>
+public sealed record ServicingEvents(
+    IReadOnlyList<DateTimeOffset> Boots,
+    IReadOnlyList<DateTimeOffset> RestartRequired,
+    IReadOnlyList<DateTimeOffset> ServicingFailures,
+    IReadOnlyList<DateTimeOffset> UnexpectedShutdowns);
+
+public interface IServicingEventLog
+{
+    /// <summary>The events since <paramref name="since"/>, or null when the logs can't be read.</summary>
+    ServicingEvents? Read(DateTimeOffset since, CancellationToken cancellationToken);
+}

@@ -14,7 +14,7 @@ namespace WuHealthGuard.Core.Checks;
 /// <item>Leftovers such as <c>pending.old</c> or <c>pending.xml.bad</c> are evidence of earlier failures.</item>
 /// </list>
 /// </summary>
-public sealed class PendingXmlCheck(IFileSystem files, IRegistryReader registry, ISystemInfo system, TimeProvider time) : IHealthCheck
+public sealed class PendingXmlCheck(IFileSystem files, IRegistryReader registry, ISystemInfo system, TimeProvider time, ServicingRestart? restart = null) : IHealthCheck
 {
     public const string CheckId = "pending-xml";
     public const string PresentCode = "PENDING_XML";
@@ -40,7 +40,8 @@ public sealed class PendingXmlCheck(IFileSystem files, IRegistryReader registry,
     {
         var findings = new List<Finding>();
         var now = time.GetUtcNow();
-        var lastBoot = system.LastBootTime;
+        var servicing = (restart ?? ServicingRestart.RealBootOnly(system, time)).Assess(cancellationToken);
+        var lastBoot = servicing.LastBoot;
         var winSxS = WinSxS(system.WindowsDirectory);
         var path = PendingXmlPath(system.WindowsDirectory);
         var leftovers = files.GetFileNames(winSxS, "pending*")
@@ -84,8 +85,11 @@ public sealed class PendingXmlCheck(IFileSystem files, IRegistryReader registry,
                     RestartImpact.RestartNeeded,
                     "Update work queued for the next restart",
                     $"{path} ({pending.Length / 1024} KB, written {BootTime.Format(pending.LastWriteTime)}) will be processed " +
-                    "during the next restart. Use Restart, not Shut down, and let \"Working on updates\" finish.")
+                    "during the next restart that installs updates." +
+                    (servicing.Skipped ? $" The start at {BootTime.Format(system.LastBootTime)} didn't run it: Windows waits for \"Update and restart\"." : "") +
+                    "\n\nWhat to do: " + ServicingBoot.HowToRestart + " Let \"Working on updates\" finish.")
                 {
+                    SuggestedFixIds = [FixIds.OpenWindowsUpdate],
                     Data = data,
                 });
             }

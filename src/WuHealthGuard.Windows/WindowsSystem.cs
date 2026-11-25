@@ -220,3 +220,11 @@ public sealed class WindowsServiceControl : IServiceControl
             service.WaitForStatus(ServiceControllerStatus.Running, timeout);
         }, cancellationToken);
 }
+
+public sealed class WindowsShellLauncher : IShellLauncher
+{
+    public void Open(string uri)
+    {
+        using var process = Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+    }
+}

@@ -27,6 +27,7 @@ internal static class PreviewRenderer
         RenderWindow(fixes, RedReport(), paused: true, fullScanAt: 37, select: null, Path.Combine(folder, "window-red"));
         RenderWindow(fixes, GreenReport(), paused: false, fullScanAt: null, select: FailedUpdatesCheck.AppFailedCode, Path.Combine(folder, "window-green"));
         RenderWindow(fixes, ComponentStoreReport(), paused: false, fullScanAt: null, select: null, Path.Combine(folder, "window-fixes"));
+        RenderWindow(fixes, WaitingReport(), paused: false, fullScanAt: null, select: null, Path.Combine(folder, "window-waiting"));
         return 0;
     }
 
@@ -207,6 +208,93 @@ internal static class PreviewRenderer
             new(ServicingActivityCheck.CheckId, "WORKER_IDLE", Severity.Info, RestartImpact.None, "Windows' servicing worker is loaded but idle", "…"),
         ];
         return new HealthReport(DateTimeOffset.Now, DateTimeOffset.Now.AddHours(-6), findings, []);
+    }
+
+    /// <summary>
+    /// An update installed last night, then a cold boot that skipped it (Windows waits for "Update and restart"):
+    /// built by the real checks from fake registry, files and event logs, so the text is what users see.
+    /// </summary>
+    private static HealthReport WaitingReport()
+    {
+        var now = DateTimeOffset.Now;
+        var boot = now.AddHours(-9.5);
+        var installed = boot.AddHours(-10);
+        var previousBoot = installed.AddHours(-14);
+        var registry = new SampleRegistry();
+        registry.Key(RegistryPaths.CbsPackages, null);
+        string[] builds = ["10.0.26100.9974", "10.0.26100.9818", "10.0.26100.9549"];
+        for (var i = 0; i < 1340; i++)
+        {
+            var (build, state) = i < 672 ? (builds[0], CbsPackageState.InstallPending) : (builds[i % 3], CbsPackageState.UninstallPending);
+            var version = build[(build.IndexOf("26100", StringComparison.Ordinal))..];
+            registry.Key($@"{RegistryPaths.CbsPackages}\Package_{i}_for_RollupFix~31bf3856ad364e35~amd64~~{version}.1.5", installed, ("CurrentState", state));
+        }
+
+        registry.Key(RegistryPaths.CbsRebootPending, installed);
+        var system = new SampleSystem(boot);
+        var time = new SampleTime(now);
+        var restart = new ServicingRestart(system, new SampleEventLog(new ServicingEvents([previousBoot, boot], [installed], [], [])), time);
+        var files = new SampleFiles(PendingXmlCheck.PendingXmlPath(system.WindowsDirectory), installed);
+
+        var findings = new List<Finding>();
+        IHealthCheck[] checks =
+        [
+            new CbsPendingPackagesCheck(registry, system, time, restart),
+            new PendingXmlCheck(files, registry, system, time, restart),
+            new RebootFlagsCheck(registry, system, restart),
+        ];
+        foreach (var check in checks)
+        {
+            findings.AddRange(check.RunAsync(CancellationToken.None).GetAwaiter().GetResult());
+        }
+
+        return new HealthReport(now, boot, findings, []);
+    }
+
+    private sealed class SampleRegistry : IRegistryReader
+    {
+        private readonly Dictionary<string, (DateTimeOffset? Written, Dictionary<string, object> Values)> _keys = new(StringComparer.OrdinalIgnoreCase);
+
+        public void Key(string path, DateTimeOffset? written, params (string Name, object Value)[] values) =>
+            _keys[path] = (written, values.ToDictionary(v => v.Name, v => v.Value, StringComparer.OrdinalIgnoreCase));
+
+        public bool KeyExists(string path) => _keys.ContainsKey(path);
+
+        public object? GetValue(string path, string valueName) =>
+            _keys.TryGetValue(path, out var key) && key.Values.TryGetValue(valueName, out var value) ? value : null;
+
+        public IReadOnlyList<string> GetSubKeyNames(string path) =>
+            _keys.Keys.Where(k => k.StartsWith(path + @"\", StringComparison.OrdinalIgnoreCase) && !k[(path.Length + 1)..].Contains('\\', StringComparison.Ordinal))
+                .Select(k => k[(path.Length + 1)..]).ToList();
+
+        public DateTimeOffset? GetKeyLastWriteTime(string path) => _keys.TryGetValue(path, out var key) ? key.Written : null;
+    }
+
+    private sealed class SampleSystem(DateTimeOffset boot) : ISystemInfo
+    {
+        public DateTimeOffset? LastBootTime => boot;
+
+        public string WindowsDirectory => @"C:\Windows";
+    }
+
+    private sealed class SampleTime(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now.ToUniversalTime();
+    }
+
+    private sealed class SampleEventLog(ServicingEvents events) : IServicingEventLog
+    {
+        public ServicingEvents? Read(DateTimeOffset since, CancellationToken cancellationToken) => events;
+    }
+
+    private sealed class SampleFiles(string pendingXml, DateTimeOffset written) : IFileSystem
+    {
+        public FileSnapshot? GetFile(string path) =>
+            string.Equals(path, pendingXml, StringComparison.OrdinalIgnoreCase) ? new FileSnapshot(path, 900_000, written) : null;
+
+        public bool DirectoryExists(string path) => true;
+
+        public IReadOnlyList<string> GetFileNames(string directory, string pattern) => ["pending.xml"];
     }
 
     private sealed class NeverConfirm : IConfirmationPrompt

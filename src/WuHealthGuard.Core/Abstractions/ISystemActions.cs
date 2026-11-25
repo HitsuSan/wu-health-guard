@@ -14,6 +14,12 @@ public interface IProcessRunner
     Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, Action<string>? onOutputLine, CancellationToken cancellationToken);
 }
 
+/// <summary>Opens a Settings page or other URI with the shell, e.g. <c>ms-settings:windowsupdate</c>.</summary>
+public interface IShellLauncher
+{
+    void Open(string uri);
+}
+
 public interface IServiceControl
 {
     /// <summary>Stops the service and waits until it has stopped. No-op if already stopped.</summary>

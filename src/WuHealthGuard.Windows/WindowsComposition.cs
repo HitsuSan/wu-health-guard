@@ -21,12 +21,14 @@ public sealed class WindowsComposition : IDisposable
         PauseController = new UxSettingsPauseController(Registry, Time);
         ComponentStore = new ComponentStoreCheck(_dism);
 
+        // A start that skipped waiting update work doesn't count as a failed restart (see ServicingRestart).
+        var restart = new ServicingRestart(System, new WindowsServicingEventLog(), Time);
         Scanner = new HealthScanner(
             [
                 new ServicingActivityCheck(Processes),
-                new CbsPendingPackagesCheck(Registry, System, Time),
-                new PendingXmlCheck(Files, Registry, System, Time),
-                new RebootFlagsCheck(Registry, System),
+                new CbsPendingPackagesCheck(Registry, System, Time, restart),
+                new PendingXmlCheck(Files, Registry, System, Time, restart),
+                new RebootFlagsCheck(Registry, System, restart),
                 new FastStartupCheck(Registry, Time),
                 ComponentStore,
                 new FailedUpdatesCheck(new WuaUpdateHistoryProvider(), Time),
@@ -76,6 +78,7 @@ public sealed class WindowsComposition : IDisposable
             new RestartUpdateServicesFix(Services),
             new ResetUpdateCacheFix(Services, Files, System),
             new SfcScanNowFix(Processes),
+            new OpenWindowsUpdateFix(new WindowsShellLauncher()),
 
             // Risky: confirmation + backup.
             new DismRestoreHealthFix(Processes),

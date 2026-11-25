@@ -94,7 +94,11 @@ public sealed class RebootFlagsCheck(IRegistryReader registry, ISystemInfo syste
                 Severity.Info,
                 RestartImpact.RestartNeeded,
                 "Windows is waiting for a restart",
-                "These restart-required flags are set:\n" + string.Join('\n', pending)));
+                "These restart-required flags are set:\n" + string.Join('\n', pending) +
+                "\n\nWhat to do: " + ServicingBoot.HowToRestart)
+            {
+                SuggestedFixIds = [FixIds.OpenWindowsUpdate],
+            });
         }
 
         return Task.FromResult<IReadOnlyList<Finding>>(findings);

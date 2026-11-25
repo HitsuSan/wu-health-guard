@@ -68,6 +68,9 @@ public static class FixGuides
             FixIds.RemoveStuckPackage => new(
                 "Uninstalls the one stuck update package. Windows Update offers the update again later.",
                 [Duration("A few minutes"), Protected("Asks first, backup and restore point"), Restart("May need a restart")]),
+            FixIds.OpenWindowsUpdate => new(
+                "Opens Settings › Windows Update. Its Restart now button installs the waiting update.",
+                [Duration("Instant"), Protected("Nothing changes until you click Restart now there"), Restart("Doesn't restart by itself")]),
             _ => new(fix.Description, fix.Risk == FixRisk.Risky ? [Protected("Asks first")] : []),
         };
     }

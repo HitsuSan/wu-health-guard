@@ -13,6 +13,7 @@ public static class FixIds
     public const string ClearStaleRebootFlags = "clear-stale-reboot-flags";
     public const string RemoveStuckPackage = "remove-stuck-package";
     public const string InPlaceRepair = "in-place-repair";
+    public const string OpenWindowsUpdate = "open-windows-update";
 }
 
 public enum FixRisk

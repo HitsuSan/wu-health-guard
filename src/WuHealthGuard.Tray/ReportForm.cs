@@ -490,7 +490,7 @@ internal sealed partial class ReportForm : Form
         {
             RestartVerdict.DoNotRestart => "Don't restart or shut down until the problems below are dealt with.",
             RestartVerdict.Caution => "A restart is probably fine, but fix the warnings below first.",
-            RestartVerdict.RestartRecommended => "Updates will finish during the next restart. Use Restart, not Shut down.",
+            RestartVerdict.RestartRecommended => "Updates will finish during the next restart. Restart from Settings › Windows Update so they install.",
             _ => "Nothing to do.",
         };
 
@@ -764,7 +764,8 @@ internal sealed partial class ReportForm : Form
             result = await _fixes.RunAsync(fix.Id, finding, _report, progress, CancellationToken.None);
         }
 
-        if (result.Status == FixRunStatus.Cancelled)
+        // Cancelled: nothing to say. Opening Settings: the Settings window is the answer, no message box on top.
+        if (result.Status == FixRunStatus.Cancelled || (result.Status == FixRunStatus.Succeeded && fix.Id == FixIds.OpenWindowsUpdate))
         {
             return;
         }

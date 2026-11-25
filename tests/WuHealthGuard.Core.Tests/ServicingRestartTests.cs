@@ -1,5 +1,6 @@
 using WuHealthGuard.Core.Abstractions;
 using WuHealthGuard.Core.Checks;
+using WuHealthGuard.Core.Fixes;
 using WuHealthGuard.Core.Model;
 
 namespace WuHealthGuard.Core.Tests;
@@ -76,6 +77,29 @@ public class ServicingRestartTests
         Assert.Contains("Update and restart", waiting.Detail, StringComparison.Ordinal);
         Assert.Contains("Settings › Windows Update › Restart now", waiting.Detail, StringComparison.Ordinal);
         Assert.Contains(report.Findings, f => f.Code == PendingXmlCheck.PresentCode);
+        Assert.Equal([FixIds.OpenWindowsUpdate], waiting.SuggestedFixIds);
+    }
+
+    private sealed class RecordingShell : IShellLauncher
+    {
+        public List<string> Opened { get; } = [];
+
+        public void Open(string uri) => Opened.Add(uri);
+    }
+
+    [Fact]
+    public async Task Open_windows_update_opens_the_settings_page_and_changes_nothing_else()
+    {
+        var shell = new RecordingShell();
+        var fix = new OpenWindowsUpdateFix(shell);
+
+        var result = await fix.ApplyAsync(new FixContext(null, new MemoryLog(), "stamp"), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(result.RestartRequired);
+        Assert.Equal(["ms-settings:windowsupdate"], shell.Opened);
+        Assert.Equal(FixRisk.Safe, fix.Risk);
+        Assert.Empty(fix.GetBackupPlan(null));
     }
 
     [Fact]

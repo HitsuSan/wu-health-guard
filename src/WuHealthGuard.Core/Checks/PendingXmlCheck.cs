@@ -89,6 +89,7 @@ public sealed class PendingXmlCheck(IFileSystem files, IRegistryReader registry,
                     (servicing.Skipped ? $" The start at {BootTime.Format(system.LastBootTime)} didn't run it: Windows waits for \"Update and restart\"." : "") +
                     "\n\nWhat to do: " + ServicingBoot.HowToRestart + " Let \"Working on updates\" finish.")
                 {
+                    SuggestedFixIds = [FixIds.OpenWindowsUpdate],
                     Data = data,
                 });
             }

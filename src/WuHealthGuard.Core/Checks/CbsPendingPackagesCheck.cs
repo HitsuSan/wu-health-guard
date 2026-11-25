@@ -88,7 +88,7 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
                 "What to do: " + ServicingBoot.HowToRestart + " With Fast Startup on, Shut down never installs them either. " +
                 "If they're still pending after that restart, they're stuck, and this turns red.")
             {
-                SuggestedFixIds = [FixIds.TurnOffFastStartup],
+                SuggestedFixIds = [FixIds.OpenWindowsUpdate, FixIds.TurnOffFastStartup],
                 Data = CountData(lingering, now),
                 Items = CbsPackages.Names(lingering),
             });
@@ -111,6 +111,7 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
                 CbsPackages.Summarize(normal, now) + "\n\n" +
                 "This is normal.\n\nWhat to do: " + ServicingBoot.HowToRestart + " Let \"Working on updates\" finish.")
             {
+                SuggestedFixIds = [FixIds.OpenWindowsUpdate],
                 Data = CountData(normal, now),
                 Items = CbsPackages.Names(normal),
             });

@@ -78,6 +78,7 @@ public sealed class WindowsComposition : IDisposable
             new RestartUpdateServicesFix(Services),
             new ResetUpdateCacheFix(Services, Files, System),
             new SfcScanNowFix(Processes),
+            new OpenWindowsUpdateFix(new WindowsShellLauncher()),
 
             // Risky: confirmation + backup.
             new DismRestoreHealthFix(Processes),

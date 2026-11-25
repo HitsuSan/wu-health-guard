@@ -84,6 +84,35 @@ public sealed class TurnOffFastStartupFix(IRegistryReader reader, IRegistryWrite
     }
 }
 
+/// <summary>
+/// Opens Settings › Windows Update, whose Restart now installs a waiting update. A plain Restart or Shut down
+/// can leave it waiting, so this is the reliable way to finish one. Changes nothing by itself.
+/// </summary>
+public sealed class OpenWindowsUpdateFix(IShellLauncher shell) : IFix
+{
+    public const string Uri = "ms-settings:windowsupdate";
+
+    public string Id => FixIds.OpenWindowsUpdate;
+
+    public string Title => "Open Windows Update";
+
+    public string Description => "Opens Settings › Windows Update (" + Uri + "). Its Restart now button installs the waiting update.";
+
+    public FixRisk Risk => FixRisk.Safe;
+
+    public string? CannotApplyReason(Finding? finding, HealthReport? report) => null;
+
+    public IReadOnlyList<BackupItem> GetBackupPlan(Finding? finding) => [];
+
+    public Task<FixResult> ApplyAsync(FixContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        context.Report("Opening Settings › Windows Update");
+        shell.Open(Uri);
+        return Task.FromResult(new FixResult(true, "Opened Settings › Windows Update. Click Restart now there to install the waiting update."));
+    }
+}
+
 public sealed class RestartUpdateServicesFix(IServiceControl services) : IFix
 {
     public string Id => FixIds.RestartUpdateServices;

@@ -9,7 +9,8 @@ namespace WuHealthGuard.Core.Checks;
 /// boot is normal. A servicing flag that was already there before the last boot is stale: the restart
 /// was supposed to clear it.
 /// </summary>
-public sealed class RebootFlagsCheck(IRegistryReader registry, ISystemInfo system) : IHealthCheck
+/// <param name="restart">Which boot counts for pending work (see <see cref="ServicingRestart"/>); null: the real last boot.</param>
+public sealed class RebootFlagsCheck(IRegistryReader registry, ISystemInfo system, ServicingRestart? restart = null) : IHealthCheck
 {
     public const string CheckId = "reboot-flags";
     public const string PendingCode = "REBOOT_PENDING";
@@ -32,7 +33,7 @@ public sealed class RebootFlagsCheck(IRegistryReader registry, ISystemInfo syste
 
     public Task<IReadOnlyList<Finding>> RunAsync(CancellationToken cancellationToken)
     {
-        var lastBoot = system.LastBootTime;
+        var lastBoot = restart is null ? system.LastBootTime : restart.Assess(cancellationToken).LastBoot;
         var pending = new List<string>();
         var findings = new List<Finding>();
 

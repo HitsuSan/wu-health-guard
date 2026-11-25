@@ -15,7 +15,8 @@ namespace WuHealthGuard.Core.Checks;
 /// <item>Pending since this boot and recent: normal; they finish during the next restart.</item>
 /// </list>
 /// </summary>
-public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInfo system, TimeProvider time) : IHealthCheck
+/// <param name="restart">Which boot counts for pending work (see <see cref="ServicingRestart"/>); null: the real last boot.</param>
+public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInfo system, TimeProvider time, ServicingRestart? restart = null) : IHealthCheck
 {
     public const string CheckId = "cbs-packages";
     public const string StuckCode = "CBS_STUCK_PENDING";
@@ -32,7 +33,8 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
     public Task<IReadOnlyList<Finding>> RunAsync(CancellationToken cancellationToken)
     {
         var now = time.GetUtcNow();
-        var lastBoot = system.LastBootTime;
+        var servicing = (restart ?? ServicingRestart.RealBootOnly(system, time)).Assess(cancellationToken);
+        var lastBoot = servicing.LastBoot;
         var packages = CbsPackages.ReadUnsettled(registry, cancellationToken);
         var findings = new List<Finding>();
 
@@ -75,11 +77,16 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
                 Severity.Warning,
                 RestartImpact.Caution,
                 $"{Count(lingering.Count, "update package")} waiting {CbsPackages.FormatAge(oldest)} for a restart",
-                "These packages have been waiting a long time without a real restart:\n" +
+                (servicing.Skipped
+                    ? $"These packages have been waiting since {BootTime.Format(servicing.SkippedSince)} for a restart that installs them:\n"
+                    : "These packages have been waiting a long time without a real restart:\n") +
                 CbsPackages.Summarize(lingering, now) + "\n\n" +
-                "With Fast Startup on, Shut down is a hibernate, so Windows never gets to finish them.\n\n" +
-                "What to do: use Restart, not Shut down (or turn Fast Startup off). If they're still pending after a real " +
-                "restart, they're stuck, and this turns red.")
+                (servicing.Skipped
+                    ? $"Windows started since then ({BootTime.Format(system.LastBootTime)}) without installing them: it waits for " +
+                      "\"Update and restart\", and nothing in the logs says it tried and failed.\n\n"
+                    : "With Fast Startup on, Shut down is a hibernate, so Windows never gets to finish them.\n\n") +
+                "What to do: " + ServicingBoot.HowToRestart + " With Fast Startup on, Shut down never installs them either. " +
+                "If they're still pending after that restart, they're stuck, and this turns red.")
             {
                 SuggestedFixIds = [FixIds.TurnOffFastStartup],
                 Data = CountData(lingering, now),
@@ -96,9 +103,13 @@ public sealed class CbsPendingPackagesCheck(IRegistryReader registry, ISystemInf
                 Severity.Info,
                 RestartImpact.RestartNeeded,
                 $"{Count(normal.Count, "update package")} waiting for a restart",
-                "These packages were staged since the last restart and will be finished during the next one:\n" +
+                (servicing.Skipped
+                    ? $"These packages were installed {BootTime.Format(servicing.SkippedSince)} and will be finished during the " +
+                      $"next restart that installs updates. The start at {BootTime.Format(system.LastBootTime)} didn't: Windows " +
+                      "waits for \"Update and restart\", and nothing in the logs says it tried and failed.\n"
+                    : "These packages were staged since the last restart and will be finished during the next one:\n") +
                 CbsPackages.Summarize(normal, now) + "\n\n" +
-                "This is normal. Use Restart (not Shut down) and let \"Working on updates\" finish.")
+                "This is normal.\n\nWhat to do: " + ServicingBoot.HowToRestart + " Let \"Working on updates\" finish.")
             {
                 Data = CountData(normal, now),
                 Items = CbsPackages.Names(normal),
